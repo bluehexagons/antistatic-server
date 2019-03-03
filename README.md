@@ -4,15 +4,15 @@ Lobby coordination server for Antistatic, the uncompromising platform fighter by
 Based on gomoose (https://github.com/bluehexagons/gomoose)
 
 ## Basic use
-Running with `-ssl -nohttp` flags will disable the HTTP component.
-
-By default, HTTPS support looks for `cert.key` and `cert.crt` in the working directory. Use `-cert path` and `-key path` to specify custom locations.
+By default, running `antistatic-server` will run on port 80 without enabling HTTPS.
 
 Run with `antistatic-server -help` to view all command line options.
 
+By default, HTTPS support looks for `cert.key` and `cert.crt` in the working directory. Use `-cert path` and `-key path` to specify custom locations.
+
 Examples:
-* `antistatic-server -ssl` will enable serving over HTTPS.
-* `antistatic-server -dir "/path/to/dir` specifies what directory to serve (defaults to working directory).
+* `antistatic-server -ssl -cert /etc/ssl/server.crt -key /etc/ssl/server.key` will specify custom crt/key locations.
+* `antistatic-server -ssl -nohttp` will disable HTTP, only providing HTTPS.
 * `antistatic-server -port 8080` specifies port to listen on.
 
 Quick command to generate a certificate using OpenSSL:
