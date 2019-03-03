@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -146,7 +147,10 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("Requested lobby [%s:%d] %s", r.RemoteAddr, port, key)
+	// we don't need the request port, and this should never return an error
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+
+	fmt.Printf("Requested lobby [%s:%d] %s\n", ip, port, key)
 
 	h.Mu.Lock()
 	l, ok := h.Lobbies[key]
@@ -156,14 +160,14 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		l.Clean()
 	}
-	l.CheckIn(r.RemoteAddr, port)
+	l.CheckIn(ip, port)
 	h.Mu.Unlock()
 	h.Mu.RLock()
 	defer h.Mu.RUnlock()
 
 	resp, err := json.Marshal(lobbyResponse{
 		Lobby: l,
-		IP:    r.RemoteAddr,
+		IP:    ip,
 		Port:  port,
 	})
 	if err != nil {
@@ -179,7 +183,9 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-var handler = &lobbyHandler{}
+var handler = &lobbyHandler{
+	Lobbies: map[string]*Lobby{},
+}
 var tickInterval, _ = time.ParseDuration("5m")
 
 func main() {
