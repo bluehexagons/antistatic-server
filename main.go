@@ -19,7 +19,6 @@ var port = 80
 var sslPort = 0
 var noHTTP = false
 var useSSL = false
-var dir = "."
 var sslCert = "cert.crt"
 var sslKey = "cert.key"
 
