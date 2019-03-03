@@ -147,6 +147,12 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.Count(r.RemoteAddr, ":") >= 2 {
+		w.WriteHeader(400)
+		w.Write([]byte("Request error: IPv6 not supported\n"))
+		return
+	}
+
 	// we don't need the request port, and this should never return an error
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 
