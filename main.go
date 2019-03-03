@@ -41,21 +41,84 @@ type Member struct {
 	CheckedIn time.Time `json:"-"`
 }
 
+var memberTimeout, _ = time.ParseDuration("30s")
+
+// Stale returns if the member has not checked in within the timeout duration
+// Assumes the member's lobby is already read-locked.
+func (m *Member) Stale() bool {
+	now := time.Now()
+	return now.After(m.CheckedIn.Add(memberTimeout))
+}
+
 // Lobby holds information about a lobby
 type Lobby struct {
 	Key     string       `json:"key"`
-	Mu      sync.RWMutex `json:"-"`
-	Members []Member     `json:"members"`
+	Mu      sync.RWMutex `json:"-"` // guards self and members
+	Members []*Member    `json:"members"`
+}
+
+// Clean will check if any members are stale, then recreate or nils its Members list
+func (l *Lobby) Clean() {
+	l.Mu.RLock()
+	stale := 0
+	for _, m := range l.Members {
+		if m.Stale() {
+			stale++
+		}
+	}
+
+	l.Mu.RUnlock()
+	if stale == 0 {
+		return
+	}
+
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	if stale == len(l.Members) {
+		l.Members = nil
+		return
+	}
+
+	members := make([]*Member, 0, len(l.Members)-stale)
+
+	for _, m := range l.Members {
+		if !m.Stale() {
+			members = append(members, m)
+		}
+	}
+
+	l.Members = members
+}
+
+// CheckIn checks a member in, either adding the member or updating its CheckedIn time.
+func (l *Lobby) CheckIn(ip string, port int) {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	for _, m := range l.Members {
+		if m.IP == ip && m.Port == port {
+			m.CheckedIn = time.Now()
+			return
+		}
+	}
+	l.Members = append(l.Members, &Member{
+		IP:        ip,
+		Port:      port,
+		CheckedIn: time.Now(),
+	})
 }
 
 type lobbyHandler struct {
-	Mu      sync.RWMutex // guards lobbies
-	Lobbies map[string]Lobby
+	Mu      sync.RWMutex // guards Lobbies
+	Lobbies map[string]*Lobby
+}
+
+type lobbyResponse struct {
+	Lobby *Lobby `json:"lobby"`
+	IP    string `json:"ip"`
+	Port  int    `json:"port"`
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.Mu.Lock()
-	defer h.Mu.Unlock()
 	info := strings.Split(r.RequestURI[7:], "/")
 	if len(info) < 2 {
 		w.WriteHeader(400)
@@ -85,12 +148,24 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("Requested lobby [%s:%d] %s", r.RemoteAddr, port, key)
 
+	h.Mu.Lock()
 	l, ok := h.Lobbies[key]
 	if !ok {
-		h.Lobbies[key] = Lobby{Key: key}
+		l = &Lobby{Key: key}
+		h.Lobbies[key] = l
+	} else {
+		l.Clean()
 	}
+	l.CheckIn(r.RemoteAddr, port)
+	h.Mu.Unlock()
+	h.Mu.RLock()
+	defer h.Mu.RUnlock()
 
-	resp, err := json.Marshal(l)
+	resp, err := json.Marshal(lobbyResponse{
+		Lobby: l,
+		IP:    r.RemoteAddr,
+		Port:  port,
+	})
 	if err != nil {
 		w.WriteHeader(500)
 		w.Write([]byte("Response error\n"))
@@ -104,6 +179,9 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+var handler = &lobbyHandler{}
+var tickInterval, _ = time.ParseDuration("5m")
+
 func main() {
 	if sslPort <= 0 && useSSL {
 		sslPort = 443
@@ -111,7 +189,7 @@ func main() {
 	useSSL = sslPort > 0
 
 	var wg sync.WaitGroup
-	http.Handle("/lobby/", &lobbyHandler{})
+	http.Handle("/lobby/", handler)
 	if !noHTTP {
 		log.Println("HTTP listening on port", port)
 		wg.Add(1)
@@ -134,6 +212,30 @@ func main() {
 			wg.Done()
 		}()
 	}
+
+	maintenance := time.NewTicker(tickInterval)
+	go func() {
+		for range maintenance.C {
+			var deleted []string
+			handler.Mu.RLock()
+			for k, l := range handler.Lobbies {
+				l.Clean()
+				if len(l.Members) == 0 {
+					deleted = append(deleted, k)
+				}
+			}
+			handler.Mu.RUnlock()
+			if len(deleted) != 0 {
+				handler.Mu.Lock()
+				for _, k := range deleted {
+					delete(handler.Lobbies, k)
+				}
+				handler.Mu.Unlock()
+			}
+		}
+	}()
+
 	wg.Wait()
+	maintenance.Stop()
 	fmt.Println("Done - exiting")
 }
