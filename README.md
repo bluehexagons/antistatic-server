@@ -23,7 +23,8 @@ Quick command to generate a certificate using OpenSSL:
 ## Client setup
 Antistatic checks `config.server` for URL to query.
 
-Set this using the `config` command; e.g. `config server \"http://example.com:8080\"` (quotes must be escaped until strings are better supported)
+Set this using the `config` command; e.g. `config server \"http://example.com:8080\"` (quotes must be escaped until strings are better supported).
+
 Can also modify the value by editing the `asconfig` JSON file (e.g. `nano ~/asconfig` from the in-game terminal, or sifting through the `fs.json` save game file) and adding/changing the `server` property there.
 
 ## Building
