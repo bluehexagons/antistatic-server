@@ -214,9 +214,9 @@ func main() {
 	}
 	if useSSL {
 		log.Printf("SSL listening on port %d (cert: %s, key: %s)", sslPort, sslCert, sslKey)
+		wg.Add(1)
 		go func() {
 			err := http.ListenAndServeTLS(sslHost+":"+strconv.Itoa(sslPort), sslCert, sslKey, nil)
-			wg.Add(1)
 			if err != nil {
 				log.Println("SSL listening error:", err)
 			}
