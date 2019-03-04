@@ -14,23 +14,23 @@ import (
 )
 
 var host = ""
-var sslHost = ""
+var tlsHost = ""
 var port = 80
-var sslPort = 0
+var tlsPort = 0
 var noHTTP = false
-var useSSL = false
-var sslCert = "cert.crt"
-var sslKey = "cert.key"
+var useTLS = false
+var tlsCert = "cert.crt"
+var tlsKey = "cert.key"
 
 func init() {
 	flag.StringVar(&host, "host", host, "HTTP host to listen on")
-	flag.StringVar(&sslHost, "sslhost", sslHost, "SSL host to listen on")
+	flag.StringVar(&tlsHost, "tlshost", tlsHost, "TLS host to listen on")
 	flag.IntVar(&port, "port", port, "HTTP port to listen on")
-	flag.IntVar(&sslPort, "sslport", sslPort, "SSL port to listen on")
+	flag.IntVar(&tlsPort, "tlsport", tlsPort, "TLS port to listen on")
 	flag.BoolVar(&noHTTP, "nohttp", noHTTP, "Disables HTTP")
-	flag.BoolVar(&useSSL, "ssl", useSSL, "Enables SSL (sets sslport to 443 if unspecified)")
-	flag.StringVar(&sslCert, "cert", sslCert, "File to use as SSL cert")
-	flag.StringVar(&sslKey, "key", sslKey, "File to use as SSL key")
+	flag.BoolVar(&useTLS, "tls", useTLS, "Enables TLS (sets tlsport to 443 if unspecified)")
+	flag.StringVar(&tlsCert, "cert", tlsCert, "File to use as TLS cert")
+	flag.StringVar(&tlsKey, "key", tlsKey, "File to use as TLS key")
 	flag.Parse()
 }
 
@@ -194,10 +194,10 @@ var handler = &lobbyHandler{
 var tickInterval, _ = time.ParseDuration("5m")
 
 func main() {
-	if sslPort <= 0 && useSSL {
-		sslPort = 443
+	if tlsPort <= 0 && useTLS {
+		tlsPort = 443
 	}
-	useSSL = sslPort > 0
+	useTLS = tlsPort > 0
 
 	var wg sync.WaitGroup
 	http.Handle("/lobby/", handler)
@@ -212,13 +212,13 @@ func main() {
 			wg.Done()
 		}()
 	}
-	if useSSL {
-		log.Printf("SSL listening on port %d (cert: %s, key: %s)", sslPort, sslCert, sslKey)
+	if useTLS {
+		log.Printf("TLS listening on port %d (cert: %s, key: %s)", tlsPort, tlsCert, tlsKey)
 		wg.Add(1)
 		go func() {
-			err := http.ListenAndServeTLS(sslHost+":"+strconv.Itoa(sslPort), sslCert, sslKey, nil)
+			err := http.ListenAndServeTLS(tlsHost+":"+strconv.Itoa(tlsPort), tlsCert, tlsKey, nil)
 			if err != nil {
-				log.Println("SSL listening error:", err)
+				log.Println("TLS listening error:", err)
 			}
 			wg.Done()
 		}()

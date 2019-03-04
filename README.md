@@ -8,11 +8,13 @@ By default, running `antistatic-server` will run on port 80 without enabling HTT
 
 Run with `antistatic-server -help` to view all command line options.
 
-By default, HTTPS support looks for `cert.key` and `cert.crt` in the working directory. Use `-cert path` and `-key path` to specify custom locations.
+By default, HTTPS support looks for `cert.key` and `cert.crt` in the working directory.
+Use `-cert path` and `-key path` to specify custom locations.
+Specifying a port using -tlsport will implicitly enable TLS.
 
 Examples:
-* `antistatic-server -ssl -cert /etc/ssl/server.crt -key /etc/ssl/server.key` will specify custom crt/key locations.
-* `antistatic-server -ssl -nohttp` will disable HTTP, only providing HTTPS.
+* `antistatic-server -tls -cert /etc/tls/server.crt -key /etc/tls/server.key` will specify custom crt/key locations.
+* `antistatic-server -tls -nohttp` will disable HTTP, only providing HTTPS.
 * `antistatic-server -port 8080` specifies port to listen on.
 
 Quick command to generate a certificate using OpenSSL:
