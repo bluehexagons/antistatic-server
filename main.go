@@ -107,6 +107,28 @@ func (l *Lobby) CheckIn(ip string, port int) {
 	})
 }
 
+// CheckOut checks a member out, removing the member
+func (l *Lobby) CheckOut(h *lobbyHandler, ip string, port int) {
+	l.Mu.Lock()
+	defer l.Mu.Unlock()
+	for k, m := range l.Members {
+		if m.IP == ip && m.Port == port {
+			if len(l.Members) > 1 {
+				l.Members[k] = l.Members[len(l.Members)-1]
+				l.Members = l.Members[:len(l.Members)-1]
+			} else {
+				delete(h.Lobbies, l.Key)
+			}
+			return
+		}
+	}
+	l.Members = append(l.Members, &Member{
+		IP:        ip,
+		Port:      port,
+		CheckedIn: time.Now(),
+	})
+}
+
 type lobbyHandler struct {
 	Mu      sync.RWMutex // guards Lobbies
 	Lobbies map[string]*Lobby
@@ -119,6 +141,12 @@ type lobbyResponse struct {
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.Count(r.RemoteAddr, ":") >= 2 {
+		w.WriteHeader(400)
+		w.Write([]byte("Request error: IPv6 unsupported\n"))
+		return
+	}
+
 	info := strings.Split(r.RequestURI[7:], "/")
 	if len(info) < 2 {
 		w.WriteHeader(400)
@@ -146,12 +174,6 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.Count(r.RemoteAddr, ":") >= 2 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error: IPv6 not supported\n"))
-		return
-	}
-
 	// we don't need the request port, and this should never return an error
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 
@@ -165,6 +187,14 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		l.Clean()
 	}
+
+	if len(info) > 2 && info[2] == "quit" {
+		l.CheckOut(h, ip, port)
+		w.Write([]byte("OK\n"))
+		h.Mu.Unlock()
+		return
+	}
+
 	l.CheckIn(ip, port)
 	h.Mu.Unlock()
 	h.Mu.RLock()
