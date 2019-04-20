@@ -142,9 +142,11 @@ type lobbyResponse struct {
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("Requested lobby\n")
 	if strings.Count(r.RemoteAddr, ":") >= 2 {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error: IPv6 unsupported\n"))
+		fmt.Printf("Request error: IPv6\n")
 		return
 	}
 
@@ -152,6 +154,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(info) < 2 {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
+		fmt.Printf("Request error: insufficient parameters\n")
 		return
 	}
 
@@ -159,6 +162,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
+		fmt.Printf("Request error: empty key\n")
 		return
 	}
 
@@ -166,12 +170,14 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
+		fmt.Printf("Request error: non-integer port\n")
 		return
 	}
 
 	if port > 65535 || port < 0 {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
+		fmt.Printf("Request error: invalid port\n")
 		return
 	}
 
