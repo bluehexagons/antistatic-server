@@ -108,6 +108,7 @@ func (l *Lobby) CheckIn(ip string, port int) {
 }
 
 // CheckOut checks a member out, removing the member
+// Assumes that h.Mu is already locked for writing
 func (l *Lobby) CheckOut(h *lobbyHandler, ip string, port int) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
@@ -174,6 +175,10 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == "OPTIONS" {
+		return
+	}
+
 	// we don't need the request port, and this should never return an error
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 
@@ -188,14 +193,13 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		l.Clean()
 	}
 
-	if len(info) > 2 && info[2] == "quit" {
+	switch r.Method {
+	case "PUT":
+		l.CheckIn(ip, port)
+	case "DELETE":
 		l.CheckOut(h, ip, port)
-		w.Write([]byte("OK\n"))
-		h.Mu.Unlock()
-		return
 	}
 
-	l.CheckIn(ip, port)
 	h.Mu.Unlock()
 	h.Mu.RLock()
 	defer h.Mu.RUnlock()
