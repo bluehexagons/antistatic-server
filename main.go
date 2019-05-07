@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+
+	"golang.org/x/crypto/acme/autocert"
 )
 
 var host = ""
@@ -17,6 +19,7 @@ var noHTTP = false
 var useTLS = false
 var tlsCert = "cert.crt"
 var tlsKey = "cert.key"
+var autocertDomain = ""
 
 func init() {
 	flag.StringVar(&host, "host", host, "HTTP host to listen on")
@@ -27,6 +30,7 @@ func init() {
 	flag.BoolVar(&useTLS, "tls", useTLS, "Enables TLS (sets tlsport to 443 if unspecified)")
 	flag.StringVar(&tlsCert, "cert", tlsCert, "File to use as TLS cert")
 	flag.StringVar(&tlsKey, "key", tlsKey, "File to use as TLS key")
+	flag.StringVar(&autocertDomain, "autocert", tlsKey, "Domain to serve")
 	flag.Parse()
 }
 
@@ -37,12 +41,26 @@ func main() {
 	useTLS = tlsPort > 0
 
 	var wg sync.WaitGroup
-	http.Handle("/lobby/", handler)
+	mux := http.NewServeMux()
+	mux.Handle("/lobby/", handler)
+
+	if autocertDomain != "" {
+		log.Println("HTTPS autocert listening on", autocertDomain)
+		wg.Add(1)
+		go func() {
+			err := http.Serve(autocert.NewListener(autocertDomain), mux)
+			if err != nil {
+				log.Println("HTTPS autocert listening error:", err)
+			}
+			wg.Done()
+		}()
+	}
+
 	if !noHTTP {
 		log.Println("HTTP listening on port", port)
 		wg.Add(1)
 		go func() {
-			err := http.ListenAndServe(host+":"+strconv.Itoa(port), nil)
+			err := http.ListenAndServe(host+":"+strconv.Itoa(port), mux)
 			if err != nil {
 				log.Println("HTTP listening error:", err)
 			}
@@ -53,7 +71,7 @@ func main() {
 		log.Printf("TLS listening on port %d (cert: %s, key: %s)", tlsPort, tlsCert, tlsKey)
 		wg.Add(1)
 		go func() {
-			err := http.ListenAndServeTLS(tlsHost+":"+strconv.Itoa(tlsPort), tlsCert, tlsKey, nil)
+			err := http.ListenAndServeTLS(tlsHost+":"+strconv.Itoa(tlsPort), tlsCert, tlsKey, mux)
 			if err != nil {
 				log.Println("TLS listening error:", err)
 			}
