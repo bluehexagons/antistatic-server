@@ -1,16 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
-	"time"
 )
 
 var host = ""
@@ -33,205 +29,6 @@ func init() {
 	flag.StringVar(&tlsKey, "key", tlsKey, "File to use as TLS key")
 	flag.Parse()
 }
-
-// Member holds information about a lobby member
-type Member struct {
-	IP        string    `json:"ip"`
-	Port      int       `json:"port"`
-	CheckedIn time.Time `json:"-"`
-}
-
-var memberTimeout, _ = time.ParseDuration("30s")
-
-// Stale returns if the member has not checked in within the timeout duration
-// Assumes the member's lobby is already read-locked.
-func (m *Member) Stale() bool {
-	now := time.Now()
-	return now.After(m.CheckedIn.Add(memberTimeout))
-}
-
-// Lobby holds information about a lobby
-type Lobby struct {
-	Key     string       `json:"key"`
-	Mu      sync.RWMutex `json:"-"` // guards self and members
-	Members []*Member    `json:"members"`
-}
-
-// Clean will check if any members are stale, then recreate or nils its Members list
-func (l *Lobby) Clean() {
-	l.Mu.RLock()
-	stale := 0
-	for _, m := range l.Members {
-		if m.Stale() {
-			stale++
-		}
-	}
-
-	l.Mu.RUnlock()
-	if stale == 0 {
-		return
-	}
-
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	if stale == len(l.Members) {
-		l.Members = nil
-		return
-	}
-
-	members := make([]*Member, 0, len(l.Members)-stale)
-
-	for _, m := range l.Members {
-		if !m.Stale() {
-			members = append(members, m)
-		}
-	}
-
-	l.Members = members
-}
-
-// CheckIn checks a member in, either adding the member or updating its CheckedIn time.
-func (l *Lobby) CheckIn(ip string, port int) {
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	for _, m := range l.Members {
-		if m.IP == ip && m.Port == port {
-			m.CheckedIn = time.Now()
-			return
-		}
-	}
-	l.Members = append(l.Members, &Member{
-		IP:        ip,
-		Port:      port,
-		CheckedIn: time.Now(),
-	})
-}
-
-// CheckOut checks a member out, removing the member
-// Assumes that h.Mu is already locked for writing
-func (l *Lobby) CheckOut(h *lobbyHandler, ip string, port int) {
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	for k, m := range l.Members {
-		if m.IP == ip && m.Port == port {
-			if len(l.Members) > 1 {
-				l.Members[k] = l.Members[len(l.Members)-1]
-				l.Members = l.Members[:len(l.Members)-1]
-			} else {
-				delete(h.Lobbies, l.Key)
-			}
-			return
-		}
-	}
-	l.Members = append(l.Members, &Member{
-		IP:        ip,
-		Port:      port,
-		CheckedIn: time.Now(),
-	})
-}
-
-type lobbyHandler struct {
-	Mu      sync.RWMutex // guards Lobbies
-	Lobbies map[string]*Lobby
-}
-
-type lobbyResponse struct {
-	Lobby *Lobby `json:"lobby"`
-	IP    string `json:"ip"`
-	Port  int    `json:"port"`
-}
-
-func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Requested lobby\n")
-	if strings.Count(r.RemoteAddr, ":") >= 2 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error: IPv6 unsupported\n"))
-		fmt.Printf("Request error: IPv6\n")
-		return
-	}
-
-	info := strings.Split(r.RequestURI[7:], "/")
-	if len(info) < 2 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: insufficient parameters\n")
-		return
-	}
-
-	key := info[0]
-	if key == "" {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: empty key\n")
-		return
-	}
-
-	port, err := strconv.Atoi(info[1])
-	if err != nil {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: non-integer port\n")
-		return
-	}
-
-	if port > 65535 || port < 0 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: invalid port\n")
-		return
-	}
-
-	if r.Method == "OPTIONS" {
-		return
-	}
-
-	// we don't need the request port, and this should never return an error
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-
-	fmt.Printf("Requested %s lobby [%s:%d] %s\n", r.Method, ip, port, key)
-
-	h.Mu.Lock()
-	l, ok := h.Lobbies[key]
-	if !ok {
-		l = &Lobby{Key: key}
-		h.Lobbies[key] = l
-	} else {
-		l.Clean()
-	}
-
-	switch r.Method {
-	case "PUT":
-		l.CheckIn(ip, port)
-	case "DELETE":
-		l.CheckOut(h, ip, port)
-	}
-
-	h.Mu.Unlock()
-	h.Mu.RLock()
-	defer h.Mu.RUnlock()
-
-	resp, err := json.Marshal(lobbyResponse{
-		Lobby: l,
-		IP:    ip,
-		Port:  port,
-	})
-	if err != nil {
-		w.WriteHeader(500)
-		w.Write([]byte("Response error\n"))
-		return
-	}
-
-	_, err = w.Write(resp)
-	if err != nil {
-		w.WriteHeader(500)
-		w.Write([]byte("Response error\n"))
-	}
-}
-
-var handler = &lobbyHandler{
-	Lobbies: map[string]*Lobby{},
-}
-var tickInterval, _ = time.ParseDuration("5m")
 
 func main() {
 	if tlsPort <= 0 && useTLS {
@@ -264,29 +61,7 @@ func main() {
 		}()
 	}
 
-	maintenance := time.NewTicker(tickInterval)
-	go func() {
-		for range maintenance.C {
-			var deleted []string
-			handler.Mu.RLock()
-			for k, l := range handler.Lobbies {
-				l.Clean()
-				if len(l.Members) == 0 {
-					deleted = append(deleted, k)
-				}
-			}
-			handler.Mu.RUnlock()
-			if len(deleted) != 0 {
-				handler.Mu.Lock()
-				for _, k := range deleted {
-					delete(handler.Lobbies, k)
-				}
-				handler.Mu.Unlock()
-			}
-		}
-	}()
-
 	wg.Wait()
-	maintenance.Stop()
+	handler.Ticker.Stop()
 	fmt.Println("Done - exiting")
 }
