@@ -10,6 +10,7 @@ type Lobby struct {
 	Key     string       `json:"key"`
 	Mu      sync.RWMutex `json:"-"` // guards self and members
 	Members []*Member    `json:"members"`
+	Version string       `json:"version"`
 }
 
 // Clean will check if any members are stale, then recreate or nils its Members list

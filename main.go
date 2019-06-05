@@ -30,7 +30,7 @@ func init() {
 	flag.BoolVar(&useTLS, "tls", useTLS, "Enables TLS (sets tlsport to 443 if unspecified)")
 	flag.StringVar(&tlsCert, "cert", tlsCert, "File to use as TLS cert")
 	flag.StringVar(&tlsKey, "key", tlsKey, "File to use as TLS key")
-	flag.StringVar(&autocertDomain, "autocert", tlsKey, "Domain to serve")
+	flag.StringVar(&autocertDomain, "autocert", autocertDomain, "Domain to serve")
 	flag.Parse()
 }
 
@@ -42,7 +42,8 @@ func main() {
 
 	var wg sync.WaitGroup
 	mux := http.NewServeMux()
-	mux.Handle("/lobby/", handler)
+	mux.Handle("/lobby/", oldHandler)
+	mux.Handle("/", handler)
 
 	if autocertDomain != "" {
 		log.Println("HTTPS autocert listening on", autocertDomain)
@@ -79,7 +80,11 @@ func main() {
 		}()
 	}
 
+	handler.Maintain()
+	oldHandler.Maintain()
+
 	wg.Wait()
 	handler.Ticker.Stop()
+	oldHandler.Ticker.Stop()
 	fmt.Println("Done - exiting")
 }

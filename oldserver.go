@@ -11,13 +11,19 @@ import (
 	"time"
 )
 
-type lobbyHandler struct {
+type oldLobbyHandler struct {
 	Mu      sync.RWMutex // guards Lobbies
 	Lobbies map[string]*Lobby
 	Ticker  *time.Ticker
 }
 
-func (h *lobbyHandler) Maintain() {
+type oldLobbyResponse struct {
+	Lobby *Lobby `json:"lobby"`
+	IP    string `json:"ip"`
+	Port  int    `json:"port"`
+}
+
+func (h *oldLobbyHandler) Maintain() {
 	maintenance := time.NewTicker(tickInterval)
 	h.Ticker = maintenance
 	go func() {
@@ -42,34 +48,12 @@ func (h *lobbyHandler) Maintain() {
 	}()
 }
 
-type lobbyResponse struct {
-	Lobby *Lobby `json:"lobby"`
-	IP    string `json:"ip"`
-	Port  int    `json:"port"`
-}
-
-func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Requested lobby\n")
-	if strings.Count(r.RemoteAddr, ":") >= 2 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error: IPv6 unsupported\n"))
-		fmt.Printf("Request error: IPv6\n")
-		return
-	}
-
-	if strings.Count(r.RequestURI, "/") < 2 {
-		w.WriteHeader(404)
-		w.Write([]byte("path not found\n"))
-		fmt.Printf("path not found\n")
-		return
-	}
-	version := strings.SplitN(r.RequestURI, "/", 3)[1]
-
-	info := strings.Split(r.RequestURI, "/")[2:]
+func (h *oldLobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// get split path after /lobby/
+	info := strings.Split(r.RequestURI[7:], "/")
 	if len(info) < 2 {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: insufficient parameters\n")
 		return
 	}
 
@@ -77,7 +61,6 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: empty key\n")
 		return
 	}
 
@@ -85,42 +68,35 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: non-integer port\n")
 		return
 	}
 
 	if port > 65535 || port < 0 {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: invalid port\n")
 		return
 	}
 
-	if r.Method == "OPTIONS" {
+	if strings.Count(r.RemoteAddr, ":") >= 2 {
+		w.WriteHeader(400)
+		w.Write([]byte("Request error: IPv6 not supported\n"))
 		return
 	}
 
 	// we don't need the request port, and this should never return an error
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 
-	fmt.Printf("Requested %s lobby [%s:%d] %s\n", r.Method, ip, port, key)
+	fmt.Printf("Requested lobby [%s:%d] %s\n", ip, port, key)
 
 	h.Mu.Lock()
 	l, ok := h.Lobbies[key]
 	if !ok {
-		l = &Lobby{Key: key, Version: version}
+		l = &Lobby{Key: key, Version: "v0.0.0"}
 		h.Lobbies[key] = l
 	} else {
 		l.Clean()
 	}
-
-	switch r.Method {
-	case "PUT":
-		l.CheckIn(ip, port)
-	case "DELETE":
-		l.CheckOut(h, ip, port)
-	}
-
+	l.CheckIn(ip, port)
 	h.Mu.Unlock()
 	h.Mu.RLock()
 	defer h.Mu.RUnlock()
@@ -143,7 +119,6 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-var handler = &lobbyHandler{
+var oldHandler = &oldLobbyHandler{
 	Lobbies: map[string]*Lobby{},
 }
-var tickInterval, _ = time.ParseDuration("5m")
