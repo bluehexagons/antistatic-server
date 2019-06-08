@@ -86,7 +86,7 @@ func (h *oldLobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// we don't need the request port, and this should never return an error
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 
-	fmt.Printf("Requested lobby [%s:%d] %s\n", ip, port, key)
+	fmt.Printf("Requested old lobby [%s:%d] %s\n", ip, port, key)
 
 	h.Mu.Lock()
 	l, ok := h.Lobbies[key]

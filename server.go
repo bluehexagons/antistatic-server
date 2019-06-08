@@ -49,7 +49,6 @@ type lobbyResponse struct {
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Requested lobby\n")
 	if strings.Count(r.RemoteAddr, ":") >= 2 {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error: IPv6 unsupported\n"))
@@ -66,14 +65,28 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	version := strings.SplitN(r.RequestURI, "/", 3)[1]
 
 	info := strings.Split(r.RequestURI, "/")[2:]
-	if len(info) < 2 {
+	if len(info) < 1 {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
 		fmt.Printf("Request error: insufficient parameters\n")
 		return
 	}
+	if info[0] != "lobby" {
+		// only thing so far
+		w.WriteHeader(404)
+		w.Write([]byte("path not found\n"))
+		fmt.Printf("path not found: %s\n", info[0])
+		return
+	}
+	if len(info) < 3 {
+		w.WriteHeader(400)
+		w.Write([]byte("Request error\n"))
+		fmt.Printf("Request error: insufficient parameters\n")
+		return
+	}
+	fmt.Println(info)
 
-	key := info[0]
+	key := info[1]
 	if key == "" {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
@@ -81,11 +94,11 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	port, err := strconv.Atoi(info[1])
+	port, err := strconv.Atoi(info[2])
 	if err != nil {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: non-integer port\n")
+		fmt.Printf("Request error: non-integer port %s\n", info[2])
 		return
 	}
 
