@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"sync"
 	"time"
 )
@@ -16,6 +17,10 @@ type Lobby struct {
 // Clean will check if any members are stale, then recreate or nils its Members list
 func (l *Lobby) Clean() {
 	l.Mu.RLock()
+	if l.Members == nil {
+		l.Mu.RUnlock()
+		return
+	}
 	stale := 0
 	for _, m := range l.Members {
 		if m.Stale() {
@@ -30,7 +35,7 @@ func (l *Lobby) Clean() {
 
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
-	if stale == len(l.Members) {
+	if stale >= len(l.Members) {
 		l.Members = nil
 		return
 	}
@@ -75,13 +80,9 @@ func (l *Lobby) CheckOut(h *lobbyHandler, ip string, port int) {
 				l.Members = l.Members[:len(l.Members)-1]
 			} else {
 				delete(h.Lobbies, l.Key)
+				log.Printf("Lobby emptied: %s\n", l.Key)
 			}
 			return
 		}
 	}
-	l.Members = append(l.Members, &Member{
-		IP:        ip,
-		Port:      port,
-		CheckedIn: time.Now(),
-	})
 }
