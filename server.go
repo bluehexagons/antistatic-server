@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -35,6 +36,7 @@ func (h *lobbyHandler) Maintain() {
 				handler.Mu.Lock()
 				for _, k := range deleted {
 					delete(handler.Lobbies, k)
+					log.Printf("Lobby emptied (timeout): %s\n", k)
 				}
 				handler.Mu.Unlock()
 			}
@@ -121,8 +123,17 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Mu.Lock()
 	l, ok := h.Lobbies[key]
 	if !ok {
+		if r.Method == "DELETE" {
+			h.Mu.Unlock()
+			return
+		}
+
 		l = &Lobby{Key: key, Version: version}
-		h.Lobbies[key] = l
+
+		if r.Method == "PUT" {
+			h.Lobbies[key] = l
+			fmt.Printf("Created lobby %s\n", key)
+		}
 	} else {
 		l.Clean()
 	}
