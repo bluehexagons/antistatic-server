@@ -54,7 +54,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.Count(r.RemoteAddr, ":") >= 2 {
 		w.WriteHeader(400)
 		w.Write([]byte("Request error: IPv6 unsupported\n"))
-		fmt.Printf("Request error: IPv6\n")
+		fmt.Printf("Request error: IPv6 (%s)\n", r.RemoteAddr)
 		return
 	}
 
