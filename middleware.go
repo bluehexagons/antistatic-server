@@ -10,22 +10,18 @@ import (
 	"time"
 )
 
-// Context key for request ID
 type contextKey string
 
 const requestIDKey contextKey = "requestID"
 
-// generateRequestID creates a random request ID
 func generateRequestID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based ID if crypto/rand fails
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
 }
 
-// requestIDMiddleware adds a unique request ID to each request
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
@@ -38,7 +34,6 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// getRequestID retrieves the request ID from context
 func getRequestID(r *http.Request) string {
 	if id, ok := r.Context().Value(requestIDKey).(string); ok {
 		return id
@@ -46,16 +41,12 @@ func getRequestID(r *http.Request) string {
 	return ""
 }
 
-// Security headers middleware
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// CORS headers for lobby coordination
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		w.Header().Set("Access-Control-Max-Age", "3600")
-
-		// Security headers
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'")
@@ -69,7 +60,6 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// Request timeout middleware
 func withTimeout(timeout time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,12 +70,11 @@ func withTimeout(timeout time.Duration) func(http.Handler) http.Handler {
 	}
 }
 
-// Simple rate limiter using token bucket algorithm
 type rateLimiter struct {
-	mu      sync.Mutex
-	clients map[string]*bucket
-	rate    int           // tokens per interval
-	burst   int           // max tokens
+	mu       sync.Mutex
+	clients  map[string]*bucket
+	rate     int
+	burst    int
 	interval time.Duration
 }
 
@@ -101,7 +90,6 @@ func newRateLimiter(rate, burst int, interval time.Duration) *rateLimiter {
 		burst:    burst,
 		interval: interval,
 	}
-	// Cleanup old clients periodically
 	go func() {
 		ticker := time.NewTicker(interval * 10)
 		defer ticker.Stop()
@@ -138,7 +126,6 @@ func (rl *rateLimiter) allow(ip string) bool {
 		return true
 	}
 
-	// Refill tokens based on time elapsed
 	elapsed := now.Sub(b.lastSeen)
 	tokensToAdd := int(elapsed / rl.interval)
 	b.tokens += tokensToAdd
@@ -153,7 +140,6 @@ func (rl *rateLimiter) allow(ip string) bool {
 	}
 	return false
 }
-
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
@@ -165,12 +151,9 @@ func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	})
 }
 
-// getClientIP extracts the client IP from the request
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first (for proxies)
 	xff := r.Header.Get("X-Forwarded-For")
 	if xff != "" {
-		// Use first IP in the list
 		for idx := 0; idx < len(xff); idx++ {
 			if xff[idx] == ',' {
 				return xff[:idx]
@@ -179,13 +162,10 @@ func getClientIP(r *http.Request) string {
 		return xff
 	}
 	
-	// Check X-Real-IP header
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
 		return xri
 	}
 	
-	// Fall back to RemoteAddr
-	// Extract IP from "IP:Port" format
 	for idx := len(r.RemoteAddr) - 1; idx >= 0; idx-- {
 		if r.RemoteAddr[idx] == ':' {
 			return r.RemoteAddr[:idx]
@@ -194,7 +174,6 @@ func getClientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// Request size limit middleware
 func maxBytes(n int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

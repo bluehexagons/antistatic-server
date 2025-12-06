@@ -6,15 +6,13 @@ import (
 	"time"
 )
 
-// Lobby holds information about a lobby
 type Lobby struct {
-	Key     string       `json:"key"`     // Unique identifier for the lobby
-	Mu      sync.RWMutex `json:"-"`       // Mutex guards self and members
-	Members []*Member    `json:"members"` // List of active members
-	Version string       `json:"version"` // API version used by this lobby
+	Key     string       `json:"key"`
+	Mu      sync.RWMutex `json:"-"`
+	Members []*Member    `json:"members"`
+	Version string       `json:"version"`
 }
 
-// Clean will check if any members are stale, then recreate or nils its Members list
 func (l *Lobby) Clean() {
 	l.Mu.RLock()
 	if l.Members == nil {
@@ -51,7 +49,6 @@ func (l *Lobby) Clean() {
 	l.Members = members
 }
 
-// CheckIn checks a member in, either adding the member or updating its CheckedIn time.
 func (l *Lobby) CheckIn(ip string, port int) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
@@ -68,8 +65,6 @@ func (l *Lobby) CheckIn(ip string, port int) {
 	})
 }
 
-// CheckOut checks a member out, removing the member
-// Assumes that h.Mu is already locked for writing
 func (l *Lobby) CheckOut(h *lobbyHandler, ip string, port int) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()

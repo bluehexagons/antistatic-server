@@ -27,7 +27,6 @@ var autocertDomain = ""
 var requestTimeout = 30 * time.Second
 var shutdownTimeout = 30 * time.Second
 
-// Health check handler
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -51,33 +50,25 @@ func main() {
 	}
 	useTLS = tlsPort > 0
 
-	// Setup signal handling for graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var wg sync.WaitGroup
 	mux := http.NewServeMux()
-	
-	// Health check endpoint
 	mux.HandleFunc("/health", healthHandler)
-	
-	// Lobby handlers
-	mux.Handle("/lobby/", oldHandler)
 	mux.Handle("/", handler)
 
-	// Apply middleware
-	rl := newRateLimiter(60, 120, time.Minute) // 60 requests per minute, burst of 120
+	rl := newRateLimiter(60, 120, time.Minute)
 	httpHandler := requestIDMiddleware(
 		rl.middleware(
 			securityHeaders(
-				maxBytes(1024*10)( // 10KB max request size
+				maxBytes(1024*10)(
 					withTimeout(requestTimeout)(mux),
 				),
 			),
 		),
 	)
 
-	// Track servers for graceful shutdown
 	var servers []*http.Server
 
 	if autocertDomain != "" {
@@ -139,30 +130,21 @@ func main() {
 		}()
 	}
 
-	// Start maintenance routines
 	handler.Maintain()
-	oldHandler.Maintain()
 
-	// Wait for interrupt signal
 	<-ctx.Done()
 	log.Println("Shutdown signal received, starting graceful shutdown...")
 
-	// Create shutdown context with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	// Shutdown all servers
 	for _, srv := range servers {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Printf("Server shutdown error: %v", err)
 		}
 	}
 
-	// Stop maintenance tickers
 	handler.Ticker.Stop()
-	oldHandler.Ticker.Stop()
-
-	// Wait for all servers to finish
 	wg.Wait()
 	log.Println("Server stopped gracefully")
 }

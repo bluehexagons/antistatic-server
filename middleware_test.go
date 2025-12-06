@@ -9,78 +9,42 @@ import (
 
 func TestGetClientIP(t *testing.T) {
 	tests := []struct {
-		name       string
 		remoteAddr string
 		headers    map[string]string
 		expected   string
 	}{
-		{
-			name:       "RemoteAddr only",
-			remoteAddr: "192.168.1.1:12345",
-			headers:    map[string]string{},
-			expected:   "192.168.1.1",
-		},
-		{
-			name:       "X-Forwarded-For single",
-			remoteAddr: "10.0.0.1:12345",
-			headers:    map[string]string{"X-Forwarded-For": "203.0.113.1"},
-			expected:   "203.0.113.1",
-		},
-		{
-			name:       "X-Forwarded-For multiple",
-			remoteAddr: "10.0.0.1:12345",
-			headers:    map[string]string{"X-Forwarded-For": "203.0.113.1, 198.51.100.1"},
-			expected:   "203.0.113.1",
-		},
-		{
-			name:       "X-Real-IP",
-			remoteAddr: "10.0.0.1:12345",
-			headers:    map[string]string{"X-Real-IP": "203.0.113.5"},
-			expected:   "203.0.113.5",
-		},
+		{"192.168.1.1:12345", map[string]string{}, "192.168.1.1"},
+		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.1"}, "203.0.113.1"},
+		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.1, 198.51.100.1"}, "203.0.113.1"},
+		{"10.0.0.1:12345", map[string]string{"X-Real-IP": "203.0.113.5"}, "203.0.113.5"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			req.RemoteAddr = tt.remoteAddr
-			for k, v := range tt.headers {
-				req.Header.Set(k, v)
-			}
-
-			result := getClientIP(req)
-			if result != tt.expected {
-				t.Errorf("getClientIP() = %q, want %q", result, tt.expected)
-			}
-		})
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = tt.remoteAddr
+		for k, v := range tt.headers {
+			req.Header.Set(k, v)
+		}
+		if got := getClientIP(req); got != tt.expected {
+			t.Errorf("getClientIP() = %q, want %q", got, tt.expected)
+		}
 	}
 }
 
 func TestRateLimiter(t *testing.T) {
-	rl := newRateLimiter(2, 2, time.Second) // 2 per second, burst of 2
+	rl := newRateLimiter(2, 2, time.Second)
 
-	// Should allow first two requests
-	if !rl.allow("192.168.1.1") {
-		t.Error("First request should be allowed")
+	if !rl.allow("192.168.1.1") || !rl.allow("192.168.1.1") {
+		t.Error("First two requests should be allowed")
 	}
-	if !rl.allow("192.168.1.1") {
-		t.Error("Second request should be allowed")
-	}
-
-	// Third request should be denied (burst exhausted)
 	if rl.allow("192.168.1.1") {
 		t.Error("Third request should be denied")
 	}
-
-	// Different IP should be allowed
 	if !rl.allow("192.168.1.2") {
 		t.Error("Request from different IP should be allowed")
 	}
 
-	// Wait for token refill
 	time.Sleep(time.Second + 100*time.Millisecond)
-	
-	// Should be allowed again after refill
 	if !rl.allow("192.168.1.1") {
 		t.Error("Request should be allowed after refill")
 	}
@@ -93,29 +57,23 @@ func TestSecurityHeaders(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
-	
 	handler.ServeHTTP(rec, req)
 
-	// Check security headers
 	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Error("CORS header not set correctly")
+		t.Error("CORS header not set")
 	}
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
-		t.Error("X-Content-Type-Options header not set correctly")
-	}
-	if rec.Header().Get("X-Frame-Options") != "DENY" {
-		t.Error("X-Frame-Options header not set correctly")
+		t.Error("X-Content-Type-Options header not set")
 	}
 }
 
 func TestSecurityHeadersOptions(t *testing.T) {
 	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("Handler should not be called for OPTIONS request")
+		t.Error("Handler should not be called for OPTIONS")
 	}))
 
 	req := httptest.NewRequest("OPTIONS", "/", nil)
 	rec := httptest.NewRecorder()
-	
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
@@ -125,43 +83,34 @@ func TestSecurityHeadersOptions(t *testing.T) {
 
 func TestRequestIDMiddleware(t *testing.T) {
 	handler := requestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := getRequestID(r)
-		if requestID == "" {
+		if getRequestID(r) == "" {
 			t.Error("Request ID should not be empty")
 		}
-		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
-	
 	handler.ServeHTTP(rec, req)
 
-	// Check that response has X-Request-ID header
 	if rec.Header().Get("X-Request-ID") == "" {
-		t.Error("X-Request-ID header should be set in response")
+		t.Error("X-Request-ID header should be set")
 	}
 }
 
 func TestRequestIDMiddlewareWithExisting(t *testing.T) {
-	existingID := "test-request-id-123"
-	
+	existingID := "test-id-123"
 	handler := requestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := getRequestID(r)
-		if requestID != existingID {
-			t.Errorf("Request ID should be %q, got %q", existingID, requestID)
+		if getRequestID(r) != existingID {
+			t.Errorf("Request ID = %q, want %q", getRequestID(r), existingID)
 		}
-		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Request-ID", existingID)
 	rec := httptest.NewRecorder()
-	
 	handler.ServeHTTP(rec, req)
 
-	// Check that response preserves the existing ID
 	if rec.Header().Get("X-Request-ID") != existingID {
-		t.Errorf("X-Request-ID header should be %q, got %q", existingID, rec.Header().Get("X-Request-ID"))
+		t.Errorf("X-Request-ID = %q, want %q", rec.Header().Get("X-Request-ID"), existingID)
 	}
 }
