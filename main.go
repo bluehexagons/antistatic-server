@@ -144,7 +144,9 @@ func main() {
 		}
 	}
 
-	handler.Ticker.Stop()
+	if handler.Ticker != nil {
+		handler.Ticker.Stop()
+	}
 	wg.Wait()
 	log.Println("Server stopped gracefully")
 }

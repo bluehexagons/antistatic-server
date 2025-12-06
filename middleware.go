@@ -140,6 +140,7 @@ func (rl *rateLimiter) allow(ip string) bool {
 	}
 	return false
 }
+
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
