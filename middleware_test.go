@@ -122,3 +122,46 @@ func TestSecurityHeadersOptions(t *testing.T) {
 		t.Errorf("OPTIONS should return 204, got %d", rec.Code)
 	}
 }
+
+func TestRequestIDMiddleware(t *testing.T) {
+	handler := requestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := getRequestID(r)
+		if requestID == "" {
+			t.Error("Request ID should not be empty")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	
+	handler.ServeHTTP(rec, req)
+
+	// Check that response has X-Request-ID header
+	if rec.Header().Get("X-Request-ID") == "" {
+		t.Error("X-Request-ID header should be set in response")
+	}
+}
+
+func TestRequestIDMiddlewareWithExisting(t *testing.T) {
+	existingID := "test-request-id-123"
+	
+	handler := requestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := getRequestID(r)
+		if requestID != existingID {
+			t.Errorf("Request ID should be %q, got %q", existingID, requestID)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Request-ID", existingID)
+	rec := httptest.NewRecorder()
+	
+	handler.ServeHTTP(rec, req)
+
+	// Check that response preserves the existing ID
+	if rec.Header().Get("X-Request-ID") != existingID {
+		t.Errorf("X-Request-ID header should be %q, got %q", existingID, rec.Header().Get("X-Request-ID"))
+	}
+}

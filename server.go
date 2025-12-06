@@ -11,12 +11,15 @@ import (
 	"time"
 )
 
+// lobbyHandler manages lobby operations for the modern API (v1+)
+// It handles creating, updating, and removing lobby members.
 type lobbyHandler struct {
 	Mu      sync.RWMutex // guards Lobbies
 	Lobbies map[string]*Lobby
 	Ticker  *time.Ticker
 }
 
+// Maintain starts a background goroutine that periodically cleans up stale lobbies
 func (h *lobbyHandler) Maintain() {
 	maintenance := time.NewTicker(tickInterval)
 	h.Ticker = maintenance
@@ -43,17 +46,20 @@ func (h *lobbyHandler) Maintain() {
 	}()
 }
 
+// lobbyResponse is the JSON response structure for lobby queries
 type lobbyResponse struct {
 	Lobby *Lobby `json:"lobby"`
 	IP    string `json:"ip"`
 	Port  int    `json:"port"`
 }
 
+// ServeHTTP handles HTTP requests for lobby operations
+// Supports PUT (create/update), DELETE (remove), and GET (query)
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// IPv6 check
 	if strings.Count(r.RemoteAddr, ":") >= 2 {
 		http.Error(w, "IPv6 not supported", http.StatusBadRequest)
-		log.Printf("Request rejected: IPv6 address %s", r.RemoteAddr)
+		log.Printf("[%s] Request rejected: IPv6 address %s", getRequestID(r), r.RemoteAddr)
 		return
 	}
 
@@ -78,7 +84,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := info[1]
 	if !validateLobbyKey(key) {
 		http.Error(w, "Invalid lobby key", http.StatusBadRequest)
-		log.Printf("Request rejected: invalid lobby key from %s", r.RemoteAddr)
+		log.Printf("[%s] Request rejected: invalid lobby key from %s", getRequestID(r), r.RemoteAddr)
 		return
 	}
 
@@ -95,7 +101,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract client IP
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 
-	log.Printf("%s lobby [%s:%d] key=%s version=%s", r.Method, ip, port, key, version)
+	log.Printf("[%s] %s lobby [%s:%d] key=%s version=%s", getRequestID(r), r.Method, ip, port, key, version)
 
 	h.Mu.Lock()
 	l, ok := h.Lobbies[key]
@@ -110,7 +116,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if r.Method == "PUT" {
 			h.Lobbies[key] = l
-			log.Printf("Created lobby: key=%s version=%s", key, version)
+			log.Printf("[%s] Created lobby: key=%s version=%s", getRequestID(r), key, version)
 		}
 	} else {
 		l.Clean()
@@ -134,18 +140,21 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
-		log.Printf("JSON marshal error: %v", err)
+		log.Printf("[%s] JSON marshal error: %v", getRequestID(r), err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_, err = w.Write(resp)
 	if err != nil {
-		log.Printf("Write error: %v", err)
+		log.Printf("[%s] Write error: %v", getRequestID(r), err)
 	}
 }
 
+// Global handler instance for modern lobby API
 var handler = &lobbyHandler{
 	Lobbies: map[string]*Lobby{},
 }
+
+// tickInterval is the interval at which maintenance runs to clean up stale lobbies
 var tickInterval, _ = time.ParseDuration("5m")

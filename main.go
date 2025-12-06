@@ -67,10 +67,12 @@ func main() {
 
 	// Apply middleware
 	rl := newRateLimiter(60, 120, time.Minute) // 60 requests per minute, burst of 120
-	httpHandler := rl.middleware(
-		securityHeaders(
-			maxBytes(1024*10)( // 10KB max request size
-				withTimeout(requestTimeout)(mux),
+	httpHandler := requestIDMiddleware(
+		rl.middleware(
+			securityHeaders(
+				maxBytes(1024*10)( // 10KB max request size
+					withTimeout(requestTimeout)(mux),
+				),
 			),
 		),
 	)

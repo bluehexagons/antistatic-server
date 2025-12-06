@@ -4,11 +4,12 @@ import "time"
 
 // Member holds information about a lobby member
 type Member struct {
-	IP        string    `json:"ip"`
-	Port      int       `json:"port"`
-	CheckedIn time.Time `json:"-"`
+	IP        string    `json:"ip"`   // IP address of the member
+	Port      int       `json:"port"` // Port number the member is listening on
+	CheckedIn time.Time `json:"-"`    // Last check-in time (not sent to clients)
 }
 
+// memberTimeout is the duration after which a member is considered stale
 var memberTimeout, _ = time.ParseDuration("30s")
 
 // Stale returns if the member has not checked in within the timeout duration

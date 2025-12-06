@@ -8,10 +8,10 @@ import (
 
 // Lobby holds information about a lobby
 type Lobby struct {
-	Key     string       `json:"key"`
-	Mu      sync.RWMutex `json:"-"` // guards self and members
-	Members []*Member    `json:"members"`
-	Version string       `json:"version"`
+	Key     string       `json:"key"`     // Unique identifier for the lobby
+	Mu      sync.RWMutex `json:"-"`       // Mutex guards self and members
+	Members []*Member    `json:"members"` // List of active members
+	Version string       `json:"version"` // API version used by this lobby
 }
 
 // Clean will check if any members are stale, then recreate or nils its Members list

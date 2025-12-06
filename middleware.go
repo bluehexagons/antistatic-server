@@ -2,10 +2,45 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"net/http"
 	"sync"
 	"time"
 )
+
+// Context key for request ID
+type contextKey string
+
+const requestIDKey contextKey = "requestID"
+
+// generateRequestID creates a random request ID
+func generateRequestID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// requestIDMiddleware adds a unique request ID to each request
+func requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := r.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = generateRequestID()
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// getRequestID retrieves the request ID from context
+func getRequestID(r *http.Request) string {
+	if id, ok := r.Context().Value(requestIDKey).(string); ok {
+		return id
+	}
+	return ""
+}
 
 // Security headers middleware
 func securityHeaders(next http.Handler) http.Handler {
