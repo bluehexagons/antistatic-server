@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -51,63 +50,41 @@ type lobbyResponse struct {
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// IPv6 check
 	if strings.Count(r.RemoteAddr, ":") >= 2 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error: IPv6 unsupported\n"))
-		fmt.Printf("Request error: IPv6 (%s)\n", r.RemoteAddr)
+		http.Error(w, "IPv6 not supported", http.StatusBadRequest)
+		log.Printf("Request rejected: IPv6 address %s", r.RemoteAddr)
 		return
 	}
 
+	// Parse URL path
 	if strings.Count(r.RequestURI, "/") < 2 {
-		w.WriteHeader(404)
-		w.Write([]byte("path not found\n"))
-		fmt.Printf("path not found\n")
+		http.Error(w, "Invalid path", http.StatusNotFound)
 		return
 	}
 	version := strings.SplitN(r.RequestURI, "/", 3)[1]
 
 	info := strings.Split(r.RequestURI, "/")[2:]
-	if len(info) < 1 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: insufficient parameters\n")
+	if len(info) < 1 || info[0] != "lobby" {
+		http.Error(w, "Invalid path", http.StatusNotFound)
 		return
 	}
-	if info[0] != "lobby" {
-		// only thing so far
-		w.WriteHeader(404)
-		w.Write([]byte("path not found\n"))
-		fmt.Printf("path not found: %s\n", info[0])
-		return
-	}
+	
 	if len(info) < 3 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: insufficient parameters\n")
+		http.Error(w, "Missing parameters", http.StatusBadRequest)
 		return
 	}
-	fmt.Println(info)
 
 	key := info[1]
-	if key == "" {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: empty key\n")
+	if !validateLobbyKey(key) {
+		http.Error(w, "Invalid lobby key", http.StatusBadRequest)
+		log.Printf("Request rejected: invalid lobby key from %s", r.RemoteAddr)
 		return
 	}
 
 	port, err := strconv.Atoi(info[2])
-	if err != nil {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: non-integer port %s\n", info[2])
-		return
-	}
-
-	if port > 65535 || port < 0 {
-		w.WriteHeader(400)
-		w.Write([]byte("Request error\n"))
-		fmt.Printf("Request error: invalid port\n")
+	if err != nil || !validatePort(port) {
+		http.Error(w, "Invalid port", http.StatusBadRequest)
 		return
 	}
 
@@ -115,16 +92,17 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// we don't need the request port, and this should never return an error
+	// Extract client IP
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 
-	fmt.Printf("Requested %s lobby [%s:%d] %s\n", r.Method, ip, port, key)
+	log.Printf("%s lobby [%s:%d] key=%s version=%s", r.Method, ip, port, key, version)
 
 	h.Mu.Lock()
 	l, ok := h.Lobbies[key]
 	if !ok {
 		if r.Method == "DELETE" {
 			h.Mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 
@@ -132,7 +110,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if r.Method == "PUT" {
 			h.Lobbies[key] = l
-			fmt.Printf("Created lobby %s\n", key)
+			log.Printf("Created lobby: key=%s version=%s", key, version)
 		}
 	} else {
 		l.Clean()
@@ -155,15 +133,15 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Port:  port,
 	})
 	if err != nil {
-		w.WriteHeader(500)
-		w.Write([]byte("Response error\n"))
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		log.Printf("JSON marshal error: %v", err)
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	_, err = w.Write(resp)
 	if err != nil {
-		w.WriteHeader(500)
-		w.Write([]byte("Response error\n"))
+		log.Printf("Write error: %v", err)
 	}
 }
 
