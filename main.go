@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
+	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -20,8 +24,16 @@ var useTLS = false
 var tlsCert = "cert.crt"
 var tlsKey = "cert.key"
 var autocertDomain = ""
+var requestTimeout = 30 * time.Second
+var shutdownTimeout = 30 * time.Second
 
-func init() {
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
+func main() {
 	flag.StringVar(&host, "host", host, "HTTP host to listen on")
 	flag.StringVar(&tlsHost, "tlshost", tlsHost, "TLS host to listen on")
 	flag.IntVar(&port, "port", port, "HTTP port to listen on")
@@ -32,59 +44,109 @@ func init() {
 	flag.StringVar(&tlsKey, "key", tlsKey, "File to use as TLS key")
 	flag.StringVar(&autocertDomain, "autocert", autocertDomain, "Domain to serve")
 	flag.Parse()
-}
 
-func main() {
 	if tlsPort <= 0 && useTLS {
 		tlsPort = 443
 	}
 	useTLS = tlsPort > 0
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var wg sync.WaitGroup
 	mux := http.NewServeMux()
-	mux.Handle("/lobby/", oldHandler)
+	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/", handler)
+
+	rl := newRateLimiter(60, 120, time.Minute)
+	httpHandler := requestIDMiddleware(
+		rl.middleware(
+			securityHeaders(
+				maxBytes(1024*10)(
+					withTimeout(requestTimeout)(mux),
+				),
+			),
+		),
+	)
+
+	var servers []*http.Server
 
 	if autocertDomain != "" {
 		log.Println("HTTPS autocert listening on", autocertDomain)
+		srv := &http.Server{
+			Handler:      httpHandler,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		servers = append(servers, srv)
 		wg.Add(1)
 		go func() {
-			err := http.Serve(autocert.NewListener(autocertDomain), mux)
-			if err != nil {
-				log.Println("HTTPS autocert listening error:", err)
+			defer wg.Done()
+			err := srv.Serve(autocert.NewListener(autocertDomain))
+			if err != nil && err != http.ErrServerClosed {
+				log.Println("HTTPS autocert error:", err)
 			}
-			wg.Done()
 		}()
 	}
 
 	if !noHTTP {
-		log.Println("HTTP listening on port", port)
+		log.Printf("HTTP listening on %s:%d", host, port)
+		srv := &http.Server{
+			Addr:         host + ":" + strconv.Itoa(port),
+			Handler:      httpHandler,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		servers = append(servers, srv)
 		wg.Add(1)
 		go func() {
-			err := http.ListenAndServe(host+":"+strconv.Itoa(port), mux)
-			if err != nil {
-				log.Println("HTTP listening error:", err)
+			defer wg.Done()
+			err := srv.ListenAndServe()
+			if err != nil && err != http.ErrServerClosed {
+				log.Println("HTTP error:", err)
 			}
-			wg.Done()
 		}()
 	}
+	
 	if useTLS {
-		log.Printf("TLS listening on port %d (cert: %s, key: %s)", tlsPort, tlsCert, tlsKey)
+		log.Printf("TLS listening on %s:%d (cert: %s, key: %s)", tlsHost, tlsPort, tlsCert, tlsKey)
+		srv := &http.Server{
+			Addr:         tlsHost + ":" + strconv.Itoa(tlsPort),
+			Handler:      httpHandler,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		servers = append(servers, srv)
 		wg.Add(1)
 		go func() {
-			err := http.ListenAndServeTLS(tlsHost+":"+strconv.Itoa(tlsPort), tlsCert, tlsKey, mux)
-			if err != nil {
-				log.Println("TLS listening error:", err)
+			defer wg.Done()
+			err := srv.ListenAndServeTLS(tlsCert, tlsKey)
+			if err != nil && err != http.ErrServerClosed {
+				log.Println("TLS error:", err)
 			}
-			wg.Done()
 		}()
 	}
 
 	handler.Maintain()
-	oldHandler.Maintain()
 
+	<-ctx.Done()
+	log.Println("Shutdown signal received, starting graceful shutdown...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	for _, srv := range servers {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Server shutdown error: %v", err)
+		}
+	}
+
+	if handler.Ticker != nil {
+		handler.Ticker.Stop()
+	}
 	wg.Wait()
-	handler.Ticker.Stop()
-	oldHandler.Ticker.Stop()
-	fmt.Println("Done - exiting")
+	log.Println("Server stopped gracefully")
 }
