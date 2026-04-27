@@ -11,11 +11,12 @@ import (
 )
 
 type lobbyHandler struct {
-	Mu      sync.RWMutex
-	Lobbies map[string]*Lobby
-	Ticker  *time.Ticker
-	Done    chan struct{}
-	Once    sync.Once
+	Mu       sync.RWMutex
+	Lobbies  map[string]*Lobby
+	Ticker   *time.Ticker
+	Done     chan struct{}
+	Once     sync.Once
+	StopOnce sync.Once
 }
 
 func (h *lobbyHandler) Maintain() {
@@ -56,10 +57,11 @@ func (h *lobbyHandler) Maintain() {
 }
 
 func (h *lobbyHandler) Stop() {
-	h.Once.Do(func() {})
-	if h.Done != nil {
-		close(h.Done)
-	}
+	h.StopOnce.Do(func() {
+		if h.Done != nil {
+			close(h.Done)
+		}
+	})
 }
 
 type lobbyResponse struct {
