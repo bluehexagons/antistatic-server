@@ -57,16 +57,21 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health` | Health check (returns status, lobby count, version) |
+| `GET` | `/health` | Health check (returns status, lobby count, ticket count, match count, version) |
 | `PUT` | `/{version}/lobby/{key}/{port}` | Register/update a lobby member |
 | `DELETE` | `/{version}/lobby/{key}/{port}` | Remove a lobby member |
 | `GET` | `/lobby/{key}/{port}` | Legacy endpoint (no version) |
+| `PUT` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Register or refresh a matchmaking ticket |
+| `GET` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Poll matchmaking ticket status |
+| `DELETE` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Cancel a matchmaking ticket |
 
 ### Health Endpoint Response
 ```json
 {
   "status": "ok",
   "lobby_count": 3,
+  "ticket_count": 2,
+  "match_count": 1,
   "version": "1.0.0"
 }
 ```

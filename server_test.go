@@ -10,6 +10,8 @@ import (
 func newTestLobbyHandler() *lobbyHandler {
 	return &lobbyHandler{
 		Lobbies: map[string]*Lobby{},
+		Tickets: map[string]*MatchmakingTicket{},
+		Matches: map[string]*Match{},
 	}
 }
 

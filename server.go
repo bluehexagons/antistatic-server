@@ -13,6 +13,8 @@ import (
 type lobbyHandler struct {
 	Mu       sync.RWMutex
 	Lobbies  map[string]*Lobby
+	Tickets  map[string]*MatchmakingTicket
+	Matches  map[string]*Match
 	Ticker   *time.Ticker
 	Done     chan struct{}
 	Once     sync.Once
@@ -31,25 +33,17 @@ func (h *lobbyHandler) Maintain() {
 				case <-h.Done:
 					return
 				case <-maintenance.C:
-					var deleted []string
-					h.Mu.RLock()
+					now := time.Now()
+					h.Mu.Lock()
 					for k, l := range h.Lobbies {
 						l.Clean()
 						if len(l.Members) == 0 {
-							deleted = append(deleted, k)
+							delete(h.Lobbies, k)
+							slog.Info("Lobby emptied (timeout)", "key", k)
 						}
 					}
-					h.Mu.RUnlock()
-					if len(deleted) != 0 {
-						h.Mu.Lock()
-						for _, k := range deleted {
-							if l, ok := h.Lobbies[k]; ok && len(l.Members) == 0 {
-								delete(h.Lobbies, k)
-								slog.Info("Lobby emptied (timeout)", "key", k)
-							}
-						}
-						h.Mu.Unlock()
-					}
+					h.cleanupMatchmakingLocked(now)
+					h.Mu.Unlock()
 				}
 			}
 		}()
@@ -103,88 +97,111 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		info = parts[1:]
 	}
 	if len(info) < 1 || info[0] != "lobby" {
-		http.Error(w, "Invalid path", http.StatusNotFound)
-		return
-	}
-
-	if len(info) != 3 {
-		http.Error(w, "Missing parameters", http.StatusBadRequest)
-		return
-	}
-
-	key := info[1]
-	if !validateLobbyKey(key) {
-		http.Error(w, "Invalid lobby key", http.StatusBadRequest)
-		slog.Error("Request rejected: invalid lobby key", "requestID", getRequestID(r), "remoteAddr", r.RemoteAddr)
-		return
-	}
-
-	port, err := strconv.Atoi(info[2])
-	if err != nil || !validatePort(port) {
-		http.Error(w, "Invalid port", http.StatusBadRequest)
-		return
+		if len(info) < 1 || info[0] != "matchmaking" {
+			http.Error(w, "Invalid path", http.StatusNotFound)
+			return
+		}
 	}
 
 	if r.Method == "OPTIONS" {
 		return
 	}
 
-	slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "key", key, "version", version)
-
-	h.Mu.Lock()
-	l, ok := h.Lobbies[key]
-	if !ok {
-		if r.Method == "DELETE" {
-			h.Mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
+	if info[0] == "lobby" {
+		if len(info) != 3 {
+			http.Error(w, "Missing parameters", http.StatusBadRequest)
 			return
 		}
 
-		l = &Lobby{Key: key, Version: version}
-
-		if r.Method == "PUT" {
-			h.Lobbies[key] = l
-			slog.Info("Created lobby", "requestID", getRequestID(r), "key", key, "version", version)
+		key := info[1]
+		if !validateLobbyKey(key) {
+			http.Error(w, "Invalid lobby key", http.StatusBadRequest)
+			slog.Error("Request rejected: invalid lobby key", "requestID", getRequestID(r), "remoteAddr", r.RemoteAddr)
+			return
 		}
-	} else {
-		l.Clean()
-	}
 
-	switch r.Method {
-	case "PUT":
-		l.CheckIn(ip, port)
-	case "DELETE":
-		l.CheckOut(ip, port)
-		if len(l.Members) == 0 {
-			delete(h.Lobbies, key)
-			slog.Info("Lobby emptied", "key", key)
+		port, err := strconv.Atoi(info[2])
+		if err != nil || !validatePort(port) {
+			http.Error(w, "Invalid port", http.StatusBadRequest)
+			return
 		}
-	}
 
-	h.Mu.Unlock()
-	h.Mu.RLock()
-	defer h.Mu.RUnlock()
+		slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "key", key, "version", version)
 
-	resp, err := json.Marshal(lobbyResponse{
-		Lobby: l,
-		IP:    ip,
-		Port:  port,
-	})
-	if err != nil {
-		http.Error(w, "Internal error", http.StatusInternalServerError)
-		slog.Error("JSON marshal error", "requestID", getRequestID(r), "error", err)
+		h.Mu.Lock()
+		l, ok := h.Lobbies[key]
+		if !ok {
+			if r.Method == "DELETE" {
+				h.Mu.Unlock()
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			l = &Lobby{Key: key, Version: version}
+
+			if r.Method == "PUT" {
+				h.Lobbies[key] = l
+				slog.Info("Created lobby", "requestID", getRequestID(r), "key", key, "version", version)
+			}
+		} else {
+			l.Clean()
+		}
+
+		switch r.Method {
+		case "PUT":
+			l.CheckIn(ip, port)
+		case "DELETE":
+			l.CheckOut(ip, port)
+			if len(l.Members) == 0 {
+				delete(h.Lobbies, key)
+				slog.Info("Lobby emptied", "key", key)
+			}
+		}
+
+		h.Mu.Unlock()
+		h.Mu.RLock()
+		defer h.Mu.RUnlock()
+
+		resp, err := json.Marshal(lobbyResponse{
+			Lobby: l,
+			IP:    ip,
+			Port:  port,
+		})
+		if err != nil {
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+			slog.Error("JSON marshal error", "requestID", getRequestID(r), "error", err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err = w.Write(resp)
+		if err != nil {
+			slog.Error("Write error", "requestID", getRequestID(r), "error", err)
+		}
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_, err = w.Write(resp)
-	if err != nil {
-		slog.Error("Write error", "requestID", getRequestID(r), "error", err)
+	if len(info) != 4 {
+		http.Error(w, "Missing parameters", http.StatusBadRequest)
+		return
 	}
+
+	queue := info[1]
+	ticket := info[2]
+	port, err := strconv.Atoi(info[3])
+	if err != nil || !validatePort(port) {
+		http.Error(w, "Invalid port", http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("Matchmaking request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "ticket", ticket, "queue", queue, "version", version)
+	h.serveMatchmaking(w, r, ip, version, queue, ticket, port)
 }
 
 var handler = &lobbyHandler{
 	Lobbies: map[string]*Lobby{},
+	Tickets: map[string]*MatchmakingTicket{},
+	Matches: map[string]*Match{},
 }
 
 const tickInterval = 5 * time.Minute

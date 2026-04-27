@@ -38,12 +38,16 @@ var trustProxy = false
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	handler.Mu.RLock()
 	lobbyCount := len(handler.Lobbies)
+	ticketCount := len(handler.Tickets)
+	matchCount := len(handler.Matches)
 	handler.Mu.RUnlock()
 
 	resp, _ := json.Marshal(map[string]any{
-		"status":      "ok",
-		"lobby_count": lobbyCount,
-		"version":     "1.0.0",
+		"status":       "ok",
+		"lobby_count":  lobbyCount,
+		"ticket_count": ticketCount,
+		"match_count":  matchCount,
+		"version":      "1.0.0",
 	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -106,7 +110,7 @@ func main() {
 	httpHandler := requestIDMiddleware(
 		rl.middleware(
 			securityHeaders(
-				maxBytes(1024*10)(
+				maxBytes(1024 * 10)(
 					withTimeout(requestTimeout)(mux),
 				),
 			),
@@ -163,7 +167,7 @@ func main() {
 			}
 		}()
 	}
-	
+
 	if useTLS {
 		slog.Info("TLS listening", "host", tlsHost, "port", tlsPort, "cert", tlsCert, "key", tlsKey)
 		tlsConfig := &tls.Config{
