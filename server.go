@@ -23,21 +23,21 @@ func (h *lobbyHandler) Maintain() {
 	go func() {
 		for range maintenance.C {
 			var deleted []string
-			handler.Mu.RLock()
-			for k, l := range handler.Lobbies {
+			h.Mu.RLock()
+			for k, l := range h.Lobbies {
 				l.Clean()
 				if len(l.Members) == 0 {
 					deleted = append(deleted, k)
 				}
 			}
-			handler.Mu.RUnlock()
+			h.Mu.RUnlock()
 			if len(deleted) != 0 {
-				handler.Mu.Lock()
+				h.Mu.Lock()
 				for _, k := range deleted {
-					delete(handler.Lobbies, k)
+					delete(h.Lobbies, k)
 					log.Printf("Lobby emptied (timeout): %s\n", k)
 				}
-				handler.Mu.Unlock()
+				h.Mu.Unlock()
 			}
 		}
 	}()
@@ -50,25 +50,48 @@ type lobbyResponse struct {
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.Count(r.RemoteAddr, ":") >= 2 {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		http.Error(w, "Invalid remote address", http.StatusBadRequest)
+		log.Printf("[%s] Request rejected: invalid remote address %s", getRequestID(r), r.RemoteAddr)
+		return
+	}
+	if net.ParseIP(ip).To4() == nil {
 		http.Error(w, "IPv6 not supported", http.StatusBadRequest)
 		log.Printf("[%s] Request rejected: IPv6 address %s", getRequestID(r), r.RemoteAddr)
 		return
 	}
 
-	if strings.Count(r.RequestURI, "/") < 2 {
+	switch r.Method {
+	case http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions:
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.Trim(r.URL.Path, "/")
+	if path == "" {
 		http.Error(w, "Invalid path", http.StatusNotFound)
 		return
 	}
-	version := strings.SplitN(r.RequestURI, "/", 3)[1]
 
-	info := strings.Split(r.RequestURI, "/")[2:]
+	parts := strings.Split(path, "/")
+	version := ""
+	info := parts
+	if parts[0] != "lobby" {
+		if len(parts) < 2 {
+			http.Error(w, "Invalid path", http.StatusNotFound)
+			return
+		}
+		version = parts[0]
+		info = parts[1:]
+	}
 	if len(info) < 1 || info[0] != "lobby" {
 		http.Error(w, "Invalid path", http.StatusNotFound)
 		return
 	}
-	
-	if len(info) < 3 {
+
+	if len(info) != 3 {
 		http.Error(w, "Missing parameters", http.StatusBadRequest)
 		return
 	}
@@ -90,7 +113,6 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 	log.Printf("[%s] %s lobby [%s:%d] key=%s version=%s", getRequestID(r), r.Method, ip, port, key, version)
 
 	h.Mu.Lock()
