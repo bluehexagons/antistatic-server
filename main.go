@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,6 +27,7 @@ var useTLS = false
 var tlsCert = "cert.crt"
 var tlsKey = "cert.key"
 var autocertDomain = ""
+var autocertCacheDir = "certs"
 var requestTimeout = 30 * time.Second
 var shutdownTimeout = 30 * time.Second
 var readTimeout = 15 * time.Second
@@ -61,7 +64,8 @@ func main() {
 	flag.BoolVar(&useTLS, "tls", useTLS, "Enables TLS (sets tlsport to 443 if unspecified)")
 	flag.StringVar(&tlsCert, "cert", tlsCert, "File to use as TLS cert")
 	flag.StringVar(&tlsKey, "key", tlsKey, "File to use as TLS key")
-	flag.StringVar(&autocertDomain, "autocert", autocertDomain, "Domain to serve")
+	flag.StringVar(&autocertDomain, "autocert", autocertDomain, "Domain for automatic TLS (Let's Encrypt)")
+	flag.StringVar(&autocertCacheDir, "autocert-cache", autocertCacheDir, "Cache directory for autocert certificates")
 	flag.DurationVar(&readTimeout, "read-timeout", readTimeout, "HTTP read timeout")
 	flag.DurationVar(&writeTimeout, "write-timeout", writeTimeout, "HTTP write timeout")
 	flag.DurationVar(&idleTimeout, "idle-timeout", idleTimeout, "HTTP idle timeout")
@@ -95,22 +99,36 @@ func main() {
 	var servers []*http.Server
 
 	if autocertDomain != "" {
-		slog.Info("HTTPS autocert listening", "domain", autocertDomain)
-		srv := &http.Server{
-			Handler:      httpHandler,
-			ReadTimeout:  readTimeout,
-			WriteTimeout: writeTimeout,
-			IdleTimeout:  idleTimeout,
+		mgr := &autocert.Manager{
+			Cache:      autocert.DirCache(autocertCacheDir),
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(autocertDomain),
 		}
-		servers = append(servers, srv)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := srv.Serve(autocert.NewListener(autocertDomain))
-			if err != nil && err != http.ErrServerClosed {
-				slog.Error("HTTPS autocert error", "error", err)
+
+		ln, err := net.Listen("tcp", ":443")
+		if err != nil {
+			slog.Error("Failed to listen for autocert", "error", err)
+		} else {
+			slog.Info("HTTPS autocert listening", "domain", autocertDomain, "cache", autocertCacheDir)
+			tlsLn := tls.NewListener(ln, &tls.Config{
+				GetCertificate: mgr.GetCertificate,
+			})
+			srv := &http.Server{
+				Handler:      httpHandler,
+				ReadTimeout:  readTimeout,
+				WriteTimeout: writeTimeout,
+				IdleTimeout:  idleTimeout,
 			}
-		}()
+			servers = append(servers, srv)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := srv.Serve(tlsLn)
+				if err != nil && err != http.ErrServerClosed {
+					slog.Error("HTTPS autocert error", "error", err)
+				}
+			}()
+		}
 	}
 
 	if !noHTTP {

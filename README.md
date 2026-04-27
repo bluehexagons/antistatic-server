@@ -32,6 +32,7 @@ Specifying a port using -tlsport will implicitly enable TLS.
 | `-cert` | cert.crt | File to use as TLS cert |
 | `-key` | cert.key | File to use as TLS key |
 | `-autocert` | "" | Domain for automatic TLS (Let's Encrypt) |
+| `-autocert-cache` | certs | Cache directory for autocert certificates |
 | `-nohttp` | false | Disables HTTP server |
 | `-read-timeout` | 15s | HTTP read timeout |
 | `-write-timeout` | 15s | HTTP write timeout |
@@ -43,6 +44,7 @@ Specifying a port using -tlsport will implicitly enable TLS.
 * `antistatic-server -tls -nohttp` - HTTPS only, no HTTP
 * `antistatic-server -port 8080` - Custom HTTP port
 * `antistatic-server -autocert example.com` - Automatic TLS with Let's Encrypt
+* `antistatic-server -autocert example.com -autocert-cache /var/cache/certs` - Custom cache directory
 * `antistatic-server -read-timeout 30s -write-timeout 30s` - Custom timeouts
 * `antistatic-server -trust-proxy` - Trust proxy headers (use with reverse proxy)
 
