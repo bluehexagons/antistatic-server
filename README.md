@@ -5,12 +5,13 @@ Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 
 ## Features
 - IPv4 and IPv6 support
+- Keyed lobby and random matchmaking endpoints
 - Structured JSON logging with `log/slog`
 - Configurable HTTP timeouts
 - Automatic TLS with Let's Encrypt or custom certificates
 - Rate limiting to prevent abuse
 - Docker support
-- Health endpoint with lobby statistics
+- Health endpoint with lobby and matchmaking statistics
 
 ## Basic use
 By default, running `antistatic-server` will run on port 80 without enabling HTTPS.
@@ -76,8 +77,39 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 }
 ```
 
+### Matchmaking PUT Body
+```json
+{
+  "character": "Carbon"
+}
+```
+
+### Matchmaking Matched Response
+```json
+{
+  "status": "matched",
+  "ticket": "ticket-id",
+  "ip": "198.51.100.10",
+  "port": 45860,
+  "match": {
+    "id": "0.9.5|default|TicketA|TicketB",
+    "role": "host",
+    "peer": {
+      "ip": "198.51.100.20",
+      "port": 45861,
+      "character": "Silicon"
+    },
+    "self": {
+      "ip": "198.51.100.10",
+      "port": 45860,
+      "character": "Carbon"
+    }
+  }
+}
+```
+
 ## Client setup
-Antistatic checks `config.server` for URL to query.
+Antistatic checks `config.server` for the lobby and matchmaking server URL.
 
 Set this using the `config` command; e.g. `config server \"http://example.com:8080\"` (quotes must be escaped until strings are better supported).
 
