@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,32 +14,52 @@ type lobbyHandler struct {
 	Mu      sync.RWMutex
 	Lobbies map[string]*Lobby
 	Ticker  *time.Ticker
+	Done    chan struct{}
+	Once    sync.Once
 }
 
 func (h *lobbyHandler) Maintain() {
-	maintenance := time.NewTicker(tickInterval)
-	h.Ticker = maintenance
-	go func() {
-		for range maintenance.C {
-			var deleted []string
-			h.Mu.RLock()
-			for k, l := range h.Lobbies {
-				l.Clean()
-				if len(l.Members) == 0 {
-					deleted = append(deleted, k)
+	h.Once.Do(func() {
+		maintenance := time.NewTicker(tickInterval)
+		h.Ticker = maintenance
+		h.Done = make(chan struct{})
+		go func() {
+			defer maintenance.Stop()
+			for {
+				select {
+				case <-h.Done:
+					return
+				case <-maintenance.C:
+					var deleted []string
+					h.Mu.RLock()
+					for k, l := range h.Lobbies {
+						l.Clean()
+						if len(l.Members) == 0 {
+							deleted = append(deleted, k)
+						}
+					}
+					h.Mu.RUnlock()
+					if len(deleted) != 0 {
+						h.Mu.Lock()
+						for _, k := range deleted {
+							if l, ok := h.Lobbies[k]; ok && len(l.Members) == 0 {
+								delete(h.Lobbies, k)
+								slog.Info("Lobby emptied (timeout)", "key", k)
+							}
+						}
+						h.Mu.Unlock()
+					}
 				}
 			}
-			h.Mu.RUnlock()
-			if len(deleted) != 0 {
-			h.Mu.Lock()
-			for _, k := range deleted {
-				delete(h.Lobbies, k)
-				slog.Info("Lobby emptied (timeout)", "key", k)
-			}
-			h.Mu.Unlock()
-		}
-		}
-	}()
+		}()
+	})
+}
+
+func (h *lobbyHandler) Stop() {
+	h.Once.Do(func() {})
+	if h.Done != nil {
+		close(h.Done)
+	}
 }
 
 type lobbyResponse struct {
@@ -50,8 +69,8 @@ type lobbyResponse struct {
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
+	ip := getClientIP(r)
+	if ip == "" {
 		http.Error(w, "Invalid remote address", http.StatusBadRequest)
 		slog.Error("Request rejected: invalid remote address", "requestID", getRequestID(r), "remoteAddr", r.RemoteAddr)
 		return
@@ -133,7 +152,11 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "PUT":
 		l.CheckIn(ip, port)
 	case "DELETE":
-		l.CheckOut(h, ip, port)
+		l.CheckOut(ip, port)
+		if len(l.Members) == 0 {
+			delete(h.Lobbies, key)
+			slog.Info("Lobby emptied", "key", key)
+		}
 	}
 
 	h.Mu.Unlock()
@@ -162,4 +185,4 @@ var handler = &lobbyHandler{
 	Lobbies: map[string]*Lobby{},
 }
 
-var tickInterval, _ = time.ParseDuration("5m")
+const tickInterval = 5 * time.Minute

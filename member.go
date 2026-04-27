@@ -8,7 +8,7 @@ type Member struct {
 	CheckedIn time.Time `json:"-"`
 }
 
-var memberTimeout, _ = time.ParseDuration("30s")
+const memberTimeout = 30 * time.Second
 
 func (m *Member) Stale() bool {
 	now := time.Now()

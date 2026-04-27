@@ -78,6 +78,8 @@ type rateLimiter struct {
 	rate     int
 	burst    int
 	interval time.Duration
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 type bucket struct {
@@ -91,15 +93,27 @@ func newRateLimiter(rate, burst int, interval time.Duration) *rateLimiter {
 		rate:     rate,
 		burst:    burst,
 		interval: interval,
+		stop:     make(chan struct{}),
 	}
 	go func() {
 		ticker := time.NewTicker(interval * 10)
 		defer ticker.Stop()
-		for range ticker.C {
-			rl.cleanup()
+		for {
+			select {
+			case <-rl.stop:
+				return
+			case <-ticker.C:
+				rl.cleanup()
+			}
 		}
 	}()
 	return rl
+}
+
+func (rl *rateLimiter) Stop() {
+	rl.stopOnce.Do(func() {
+		close(rl.stop)
+	})
 }
 
 func (rl *rateLimiter) cleanup() {

@@ -77,6 +77,11 @@ func main() {
 	}
 	useTLS = tlsPort > 0
 
+	if autocertDomain != "" && useTLS {
+		slog.Warn("Both autocert and manual TLS are enabled; disabling manual TLS in favor of autocert")
+		useTLS = false
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -85,7 +90,19 @@ func main() {
 	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/", handler)
 
+	var mgr *autocert.Manager
+	if autocertDomain != "" {
+		mgr = &autocert.Manager{
+			Cache:      autocert.DirCache(autocertCacheDir),
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(autocertDomain),
+		}
+		mux.Handle("/.well-known/acme-challenge/", mgr.HTTPHandler(nil))
+	}
+
 	rl := newRateLimiter(60, 120, time.Minute)
+	defer rl.Stop()
+
 	httpHandler := requestIDMiddleware(
 		rl.middleware(
 			securityHeaders(
@@ -99,25 +116,20 @@ func main() {
 	var servers []*http.Server
 
 	if autocertDomain != "" {
-		mgr := &autocert.Manager{
-			Cache:      autocert.DirCache(autocertCacheDir),
-			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(autocertDomain),
-		}
-
 		ln, err := net.Listen("tcp", ":443")
 		if err != nil {
 			slog.Error("Failed to listen for autocert", "error", err)
 		} else {
 			slog.Info("HTTPS autocert listening", "domain", autocertDomain, "cache", autocertCacheDir)
-			tlsLn := tls.NewListener(ln, &tls.Config{
-				GetCertificate: mgr.GetCertificate,
-			})
+			tlsConfig := mgr.TLSConfig()
+			tlsConfig.MinVersion = tls.VersionTLS12
+			tlsLn := tls.NewListener(ln, tlsConfig)
 			srv := &http.Server{
-				Handler:      httpHandler,
-				ReadTimeout:  readTimeout,
-				WriteTimeout: writeTimeout,
-				IdleTimeout:  idleTimeout,
+				Handler:           httpHandler,
+				ReadTimeout:       readTimeout,
+				WriteTimeout:      writeTimeout,
+				IdleTimeout:       idleTimeout,
+				ReadHeaderTimeout: 5 * time.Second,
 			}
 			servers = append(servers, srv)
 			wg.Add(1)
@@ -134,11 +146,12 @@ func main() {
 	if !noHTTP {
 		slog.Info("HTTP listening", "host", host, "port", port)
 		srv := &http.Server{
-			Addr:         host + ":" + strconv.Itoa(port),
-			Handler:      httpHandler,
-			ReadTimeout:  readTimeout,
-			WriteTimeout: writeTimeout,
-			IdleTimeout:  idleTimeout,
+			Addr:              host + ":" + strconv.Itoa(port),
+			Handler:           httpHandler,
+			ReadTimeout:       readTimeout,
+			WriteTimeout:      writeTimeout,
+			IdleTimeout:       idleTimeout,
+			ReadHeaderTimeout: 5 * time.Second,
 		}
 		servers = append(servers, srv)
 		wg.Add(1)
@@ -153,12 +166,17 @@ func main() {
 	
 	if useTLS {
 		slog.Info("TLS listening", "host", tlsHost, "port", tlsPort, "cert", tlsCert, "key", tlsKey)
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
 		srv := &http.Server{
-			Addr:         tlsHost + ":" + strconv.Itoa(tlsPort),
-			Handler:      httpHandler,
-			ReadTimeout:  readTimeout,
-			WriteTimeout: writeTimeout,
-			IdleTimeout:  idleTimeout,
+			Addr:              tlsHost + ":" + strconv.Itoa(tlsPort),
+			Handler:           httpHandler,
+			ReadTimeout:       readTimeout,
+			WriteTimeout:      writeTimeout,
+			IdleTimeout:       idleTimeout,
+			ReadHeaderTimeout: 5 * time.Second,
+			TLSConfig:         tlsConfig,
 		}
 		servers = append(servers, srv)
 		wg.Add(1)
@@ -179,15 +197,19 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
+	var shutdownWg sync.WaitGroup
 	for _, srv := range servers {
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			slog.Error("Server shutdown error", "error", err)
-		}
+		shutdownWg.Add(1)
+		go func(s *http.Server) {
+			defer shutdownWg.Done()
+			if err := s.Shutdown(shutdownCtx); err != nil {
+				slog.Error("Server shutdown error", "error", err)
+			}
+		}(srv)
 	}
+	shutdownWg.Wait()
 
-	if handler.Ticker != nil {
-		handler.Ticker.Stop()
-	}
+	handler.Stop()
 	wg.Wait()
 	slog.Info("Server stopped gracefully")
 }

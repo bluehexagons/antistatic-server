@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log/slog"
 	"sync"
 	"time"
 )
@@ -48,7 +47,7 @@ func (l *Lobby) CheckIn(ip string, port int) {
 	})
 }
 
-func (l *Lobby) CheckOut(h *lobbyHandler, ip string, port int) {
+func (l *Lobby) CheckOut(ip string, port int) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	for k, m := range l.Members {
@@ -57,8 +56,7 @@ func (l *Lobby) CheckOut(h *lobbyHandler, ip string, port int) {
 				l.Members[k] = l.Members[len(l.Members)-1]
 				l.Members = l.Members[:len(l.Members)-1]
 			} else {
-				delete(h.Lobbies, l.Key)
-				slog.Info("Lobby emptied", "key", l.Key)
+				l.Members = nil
 			}
 			return
 		}
