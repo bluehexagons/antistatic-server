@@ -151,9 +151,17 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 			}, http.StatusConflict
 		}
 
+		existing.IP = ip
+		existing.Port = port
 		existing.CheckedIn = now
 		if existing.MatchedID != "" {
 			if match, ok := h.Matches[existing.MatchedID]; ok {
+				for i := range match.Players {
+					if match.Players[i].TicketID == existing.ID {
+						match.Players[i].IP = ip
+						match.Players[i].Port = port
+					}
+				}
 				return &matchmakingResponse{
 					Status: "matched",
 					Ticket: existing.ID,

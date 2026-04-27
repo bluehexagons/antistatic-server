@@ -78,9 +78,36 @@ func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 
 	h.Mu.RLock()
 	updated := h.Tickets[key].CheckedIn
+	updatedPort := h.Tickets[key].Port
 	h.Mu.RUnlock()
 	if !updated.After(before) {
 		t.Fatalf("checked-in time was not refreshed: before=%v after=%v", before, updated)
+	}
+	if updatedPort != 45860 {
+		t.Fatalf("ticket port = %d, want %d", updatedPort, 45860)
+	}
+}
+
+func TestMatchmakingRefreshUpdatesEndpoint(t *testing.T) {
+	h := newTestLobbyHandler()
+	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+
+	rec := serveMatchmakingRequest(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketA/45861",
+		"198.51.100.11:32000",
+		matchmakingRequest{Character: "Carbon"},
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh returned status %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	h.Mu.RLock()
+	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
+	h.Mu.RUnlock()
+	if ticket.IP != "198.51.100.11" || ticket.Port != 45861 {
+		t.Fatalf("ticket endpoint = %s:%d, want 198.51.100.11:45861", ticket.IP, ticket.Port)
 	}
 }
 
