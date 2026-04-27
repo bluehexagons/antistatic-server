@@ -30,6 +30,7 @@ var shutdownTimeout = 30 * time.Second
 var readTimeout = 15 * time.Second
 var writeTimeout = 15 * time.Second
 var idleTimeout = 60 * time.Second
+var trustProxy = false
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	handler.Mu.RLock()
@@ -64,6 +65,7 @@ func main() {
 	flag.DurationVar(&readTimeout, "read-timeout", readTimeout, "HTTP read timeout")
 	flag.DurationVar(&writeTimeout, "write-timeout", writeTimeout, "HTTP write timeout")
 	flag.DurationVar(&idleTimeout, "idle-timeout", idleTimeout, "HTTP idle timeout")
+	flag.BoolVar(&trustProxy, "trust-proxy", trustProxy, "Trust X-Forwarded-For and X-Real-IP headers")
 	flag.Parse()
 
 	if tlsPort <= 0 && useTLS {

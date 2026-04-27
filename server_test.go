@@ -91,11 +91,16 @@ func TestLobbyRejectsUnsupportedMethod(t *testing.T) {
 	}
 }
 
-func TestLobbyRejectsIPv6RemoteAddress(t *testing.T) {
+func TestLobbyAcceptsIPv6RemoteAddress(t *testing.T) {
 	h := newTestLobbyHandler()
 	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "[2001:db8::1]:32000")
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	response := decodeLobbyResponse(t, rec)
+	if response.IP != "2001:db8::1" || response.Port != 45860 {
+		t.Fatalf("response endpoint = %s:%d, want 2001:db8::1:45860", response.IP, response.Port)
 	}
 }

@@ -8,6 +8,9 @@ import (
 )
 
 func TestGetClientIP(t *testing.T) {
+	trustProxy = true
+	defer func() { trustProxy = false }()
+
 	tests := []struct {
 		remoteAddr string
 		headers    map[string]string

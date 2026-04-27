@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -145,6 +146,10 @@ func (rl *rateLimiter) allow(ip string) bool {
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
+		if ip == "" {
+			http.Error(w, "Unable to determine client IP", http.StatusBadRequest)
+			return
+		}
 		if !rl.allow(ip) {
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
@@ -154,16 +159,24 @@ func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 }
 
 func getClientIP(r *http.Request) string {
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		if idx := strings.Index(xff, ","); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
+	if trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			ip := xff
+			if idx := strings.Index(xff, ","); idx != -1 {
+				ip = strings.TrimSpace(xff[:idx])
+			}
+			if parsed := net.ParseIP(ip); parsed != nil {
+				return parsed.String()
+			}
+			return ""
 		}
-		return xff
-	}
 
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			if parsed := net.ParseIP(xri); parsed != nil {
+				return parsed.String()
+			}
+			return ""
+		}
 	}
 
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)

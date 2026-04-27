@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -14,39 +14,22 @@ type Lobby struct {
 }
 
 func (l *Lobby) Clean() {
-	l.Mu.RLock()
-	if l.Members == nil {
-		l.Mu.RUnlock()
-		return
-	}
-	stale := 0
-	for _, m := range l.Members {
-		if m.Stale() {
-			stale++
-		}
-	}
-
-	l.Mu.RUnlock()
-	if stale == 0 {
-		return
-	}
-
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
-	if stale >= len(l.Members) {
-		l.Members = nil
+
+	if l.Members == nil {
 		return
 	}
 
-	members := make([]*Member, 0, len(l.Members)-stale)
-
+	now := time.Now()
+	valid := l.Members[:0]
 	for _, m := range l.Members {
-		if !m.Stale() {
-			members = append(members, m)
+		if now.After(m.CheckedIn.Add(memberTimeout)) {
+			continue
 		}
+		valid = append(valid, m)
 	}
-
-	l.Members = members
+	l.Members = valid
 }
 
 func (l *Lobby) CheckIn(ip string, port int) {
@@ -75,7 +58,7 @@ func (l *Lobby) CheckOut(h *lobbyHandler, ip string, port int) {
 				l.Members = l.Members[:len(l.Members)-1]
 			} else {
 				delete(h.Lobbies, l.Key)
-				log.Printf("Lobby emptied: %s\n", l.Key)
+				slog.Info("Lobby emptied", "key", l.Key)
 			}
 			return
 		}
