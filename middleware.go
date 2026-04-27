@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -155,24 +156,21 @@ func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 func getClientIP(r *http.Request) string {
 	xff := r.Header.Get("X-Forwarded-For")
 	if xff != "" {
-		for idx := 0; idx < len(xff); idx++ {
-			if xff[idx] == ',' {
-				return xff[:idx]
-			}
+		if idx := strings.Index(xff, ","); idx != -1 {
+			return strings.TrimSpace(xff[:idx])
 		}
 		return xff
 	}
-	
+
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
 		return xri
 	}
-	
-	for idx := len(r.RemoteAddr) - 1; idx >= 0; idx-- {
-		if r.RemoteAddr[idx] == ':' {
-			return r.RemoteAddr[:idx]
-		}
+
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
 	}
-	return r.RemoteAddr
+	return ip
 }
 
 func maxBytes(n int64) func(http.Handler) http.Handler {

@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -32,13 +32,13 @@ func (h *lobbyHandler) Maintain() {
 			}
 			h.Mu.RUnlock()
 			if len(deleted) != 0 {
-				h.Mu.Lock()
-				for _, k := range deleted {
-					delete(h.Lobbies, k)
-					log.Printf("Lobby emptied (timeout): %s\n", k)
-				}
-				h.Mu.Unlock()
+			h.Mu.Lock()
+			for _, k := range deleted {
+				delete(h.Lobbies, k)
+				slog.Info("Lobby emptied (timeout)", "key", k)
 			}
+			h.Mu.Unlock()
+		}
 		}
 	}()
 }
@@ -53,12 +53,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		http.Error(w, "Invalid remote address", http.StatusBadRequest)
-		log.Printf("[%s] Request rejected: invalid remote address %s", getRequestID(r), r.RemoteAddr)
-		return
-	}
-	if net.ParseIP(ip).To4() == nil {
-		http.Error(w, "IPv6 not supported", http.StatusBadRequest)
-		log.Printf("[%s] Request rejected: IPv6 address %s", getRequestID(r), r.RemoteAddr)
+		slog.Error("Request rejected: invalid remote address", "requestID", getRequestID(r), "remoteAddr", r.RemoteAddr)
 		return
 	}
 
@@ -99,7 +94,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := info[1]
 	if !validateLobbyKey(key) {
 		http.Error(w, "Invalid lobby key", http.StatusBadRequest)
-		log.Printf("[%s] Request rejected: invalid lobby key from %s", getRequestID(r), r.RemoteAddr)
+		slog.Error("Request rejected: invalid lobby key", "requestID", getRequestID(r), "remoteAddr", r.RemoteAddr)
 		return
 	}
 
@@ -113,7 +108,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[%s] %s lobby [%s:%d] key=%s version=%s", getRequestID(r), r.Method, ip, port, key, version)
+	slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "key", key, "version", version)
 
 	h.Mu.Lock()
 	l, ok := h.Lobbies[key]
@@ -128,7 +123,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if r.Method == "PUT" {
 			h.Lobbies[key] = l
-			log.Printf("[%s] Created lobby: key=%s version=%s", getRequestID(r), key, version)
+			slog.Info("Created lobby", "requestID", getRequestID(r), "key", key, "version", version)
 		}
 	} else {
 		l.Clean()
@@ -152,14 +147,14 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
-		log.Printf("[%s] JSON marshal error: %v", getRequestID(r), err)
+		slog.Error("JSON marshal error", "requestID", getRequestID(r), "error", err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_, err = w.Write(resp)
 	if err != nil {
-		log.Printf("[%s] Write error: %v", getRequestID(r), err)
+		slog.Error("Write error", "requestID", getRequestID(r), "error", err)
 	}
 }
 

@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,14 +27,31 @@ var tlsKey = "cert.key"
 var autocertDomain = ""
 var requestTimeout = 30 * time.Second
 var shutdownTimeout = 30 * time.Second
+var readTimeout = 15 * time.Second
+var writeTimeout = 15 * time.Second
+var idleTimeout = 60 * time.Second
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	handler.Mu.RLock()
+	lobbyCount := len(handler.Lobbies)
+	handler.Mu.RUnlock()
+
+	resp, _ := json.Marshal(map[string]any{
+		"status":      "ok",
+		"lobby_count": lobbyCount,
+		"version":     "1.0.0",
+	})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok"}`))
+	w.Write(resp)
 }
 
 func main() {
+	slogLevel := &slog.LevelVar{}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slogLevel,
+	})))
+
 	flag.StringVar(&host, "host", host, "HTTP host to listen on")
 	flag.StringVar(&tlsHost, "tlshost", tlsHost, "TLS host to listen on")
 	flag.IntVar(&port, "port", port, "HTTP port to listen on")
@@ -43,6 +61,9 @@ func main() {
 	flag.StringVar(&tlsCert, "cert", tlsCert, "File to use as TLS cert")
 	flag.StringVar(&tlsKey, "key", tlsKey, "File to use as TLS key")
 	flag.StringVar(&autocertDomain, "autocert", autocertDomain, "Domain to serve")
+	flag.DurationVar(&readTimeout, "read-timeout", readTimeout, "HTTP read timeout")
+	flag.DurationVar(&writeTimeout, "write-timeout", writeTimeout, "HTTP write timeout")
+	flag.DurationVar(&idleTimeout, "idle-timeout", idleTimeout, "HTTP idle timeout")
 	flag.Parse()
 
 	if tlsPort <= 0 && useTLS {
@@ -72,12 +93,12 @@ func main() {
 	var servers []*http.Server
 
 	if autocertDomain != "" {
-		log.Println("HTTPS autocert listening on", autocertDomain)
+		slog.Info("HTTPS autocert listening", "domain", autocertDomain)
 		srv := &http.Server{
 			Handler:      httpHandler,
-			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 15 * time.Second,
-			IdleTimeout:  60 * time.Second,
+			ReadTimeout:  readTimeout,
+			WriteTimeout: writeTimeout,
+			IdleTimeout:  idleTimeout,
 		}
 		servers = append(servers, srv)
 		wg.Add(1)
@@ -85,19 +106,19 @@ func main() {
 			defer wg.Done()
 			err := srv.Serve(autocert.NewListener(autocertDomain))
 			if err != nil && err != http.ErrServerClosed {
-				log.Println("HTTPS autocert error:", err)
+				slog.Error("HTTPS autocert error", "error", err)
 			}
 		}()
 	}
 
 	if !noHTTP {
-		log.Printf("HTTP listening on %s:%d", host, port)
+		slog.Info("HTTP listening", "host", host, "port", port)
 		srv := &http.Server{
 			Addr:         host + ":" + strconv.Itoa(port),
 			Handler:      httpHandler,
-			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 15 * time.Second,
-			IdleTimeout:  60 * time.Second,
+			ReadTimeout:  readTimeout,
+			WriteTimeout: writeTimeout,
+			IdleTimeout:  idleTimeout,
 		}
 		servers = append(servers, srv)
 		wg.Add(1)
@@ -105,19 +126,19 @@ func main() {
 			defer wg.Done()
 			err := srv.ListenAndServe()
 			if err != nil && err != http.ErrServerClosed {
-				log.Println("HTTP error:", err)
+				slog.Error("HTTP error", "error", err)
 			}
 		}()
 	}
 	
 	if useTLS {
-		log.Printf("TLS listening on %s:%d (cert: %s, key: %s)", tlsHost, tlsPort, tlsCert, tlsKey)
+		slog.Info("TLS listening", "host", tlsHost, "port", tlsPort, "cert", tlsCert, "key", tlsKey)
 		srv := &http.Server{
 			Addr:         tlsHost + ":" + strconv.Itoa(tlsPort),
 			Handler:      httpHandler,
-			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 15 * time.Second,
-			IdleTimeout:  60 * time.Second,
+			ReadTimeout:  readTimeout,
+			WriteTimeout: writeTimeout,
+			IdleTimeout:  idleTimeout,
 		}
 		servers = append(servers, srv)
 		wg.Add(1)
@@ -125,7 +146,7 @@ func main() {
 			defer wg.Done()
 			err := srv.ListenAndServeTLS(tlsCert, tlsKey)
 			if err != nil && err != http.ErrServerClosed {
-				log.Println("TLS error:", err)
+				slog.Error("TLS error", "error", err)
 			}
 		}()
 	}
@@ -133,14 +154,14 @@ func main() {
 	handler.Maintain()
 
 	<-ctx.Done()
-	log.Println("Shutdown signal received, starting graceful shutdown...")
+	slog.Info("Shutdown signal received, starting graceful shutdown...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	for _, srv := range servers {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("Server shutdown error: %v", err)
+			slog.Error("Server shutdown error", "error", err)
 		}
 	}
 
@@ -148,5 +169,5 @@ func main() {
 		handler.Ticker.Stop()
 	}
 	wg.Wait()
-	log.Println("Server stopped gracefully")
+	slog.Info("Server stopped gracefully")
 }
