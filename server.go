@@ -59,9 +59,9 @@ func (h *lobbyHandler) Stop() {
 }
 
 type lobbyResponse struct {
-	Lobby *Lobby `json:"lobby"`
-	IP    string `json:"ip"`
-	Port  int    `json:"port"`
+	Lobby *LobbySnapshot `json:"lobby"`
+	IP    string         `json:"ip"`
+	Port  int            `json:"port"`
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +158,11 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		snapshot := l.Snapshot()
 		h.Mu.Unlock()
-		h.Mu.RLock()
-		defer h.Mu.RUnlock()
 
 		resp, err := json.Marshal(lobbyResponse{
-			Lobby: l,
+			Lobby: snapshot,
 			IP:    ip,
 			Port:  port,
 		})

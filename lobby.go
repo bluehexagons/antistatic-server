@@ -12,6 +12,26 @@ type Lobby struct {
 	Version string       `json:"version"`
 }
 
+type LobbySnapshot struct {
+	Key     string    `json:"key"`
+	Members []*Member `json:"members"`
+	Version string    `json:"version"`
+}
+
+func (l *Lobby) Snapshot() *LobbySnapshot {
+	l.Mu.RLock()
+	defer l.Mu.RUnlock()
+
+	members := make([]*Member, len(l.Members))
+	copy(members, l.Members)
+
+	return &LobbySnapshot{
+		Key:     l.Key,
+		Members: members,
+		Version: l.Version,
+	}
+}
+
 func (l *Lobby) Clean() {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
