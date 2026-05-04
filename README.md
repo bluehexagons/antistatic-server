@@ -40,6 +40,7 @@ Specifying a port using -tlsport will implicitly enable TLS.
 | `-write-timeout` | 15s | HTTP write timeout |
 | `-idle-timeout` | 60s | HTTP idle timeout |
 | `-trust-proxy` | false | Trust X-Forwarded-For and X-Real-IP headers |
+| `-trusted-proxy-cidrs` | "" | Comma-separated CIDR allowlist for trusted reverse proxies |
 
 ### Operational limits
 
@@ -64,7 +65,14 @@ When a capacity limit is reached, new state-creating requests return `503 Servic
 * `antistatic-server -autocert example.com` - Automatic TLS with Let's Encrypt
 * `antistatic-server -autocert example.com -autocert-cache /var/cache/certs` - Custom cache directory
 * `antistatic-server -read-timeout 30s -write-timeout 30s` - Custom timeouts
-* `antistatic-server -trust-proxy` - Trust proxy headers (use with reverse proxy)
+* `antistatic-server -trust-proxy -trusted-proxy-cidrs 127.0.0.1/32` - Trust proxy headers from a local reverse proxy
+
+### Reverse proxy setup
+
+`-trust-proxy` is still opt-in. When enabled, forwarded headers are only honored if the immediate TCP peer is in `-trusted-proxy-cidrs`.
+
+For example, when nginx runs on the same host and proxies to the Go server over loopback, use `-trust-proxy -trusted-proxy-cidrs 127.0.0.1/32`.
+If nginx connects over IPv6 loopback, include `::1/128` as well.
 
 Quick command to generate a self-signed certificate:
 ```bash
@@ -83,6 +91,8 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 | `GET` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Poll matchmaking ticket status |
 | `DELETE` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Cancel a matchmaking ticket |
 
+Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header. The first successful `PUT` for a lobby member or matchmaking ticket returns a `token`; clients must send that token in `X-Antistatic-Token` when refreshing, polling, or deleting the same member/ticket. Tokens are bearer credentials and should not be logged or shared.
+
 ### Health Endpoint Response
 ```json
 {
@@ -94,6 +104,25 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
   "successful_games_estimate": 8,
   "error_count": 1,
   "version": "1.0.0"
+}
+```
+
+### Lobby Check-In Response
+```json
+{
+  "lobby": {
+    "key": "ABC123",
+    "members": [
+      {
+        "ip": "198.51.100.10",
+        "port": 45860
+      }
+    ],
+    "version": "0.9.5"
+  },
+  "ip": "198.51.100.10",
+  "port": 45860,
+  "token": "member-owner-token"
 }
 ```
 
@@ -111,6 +140,7 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
   "ticket": "ticket-id",
   "ip": "198.51.100.10",
   "port": 45860,
+  "token": "ticket-owner-token",
   "match": {
     "id": "0.9.5|default|TicketA|TicketB",
     "role": "host",

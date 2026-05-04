@@ -3,13 +3,20 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestGetClientIP(t *testing.T) {
 	trustProxy = true
-	defer func() { trustProxy = false }()
+	if err := setTrustedProxyCIDRs("10.0.0.0/8,127.0.0.1/32"); err != nil {
+		t.Fatalf("setTrustedProxyCIDRs() error = %v", err)
+	}
+	defer func() {
+		trustProxy = false
+		trustedProxyRanges = nil
+	}()
 
 	tests := []struct {
 		remoteAddr string
@@ -31,6 +38,51 @@ func TestGetClientIP(t *testing.T) {
 		if got := getClientIP(req); got != tt.expected {
 			t.Errorf("getClientIP() = %q, want %q", got, tt.expected)
 		}
+	}
+}
+
+func TestGetClientIPIgnoresForwardedHeadersFromUntrustedProxy(t *testing.T) {
+	trustProxy = true
+	if err := setTrustedProxyCIDRs("10.0.0.0/8"); err != nil {
+		t.Fatalf("setTrustedProxyCIDRs() error = %v", err)
+	}
+	defer func() {
+		trustProxy = false
+		trustedProxyRanges = nil
+	}()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "198.51.100.10:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.1")
+
+	if got := getClientIP(req); got != "198.51.100.10" {
+		t.Fatalf("getClientIP() = %q, want %q", got, "198.51.100.10")
+	}
+}
+
+func TestGetClientIPFallsBackWhenTrustedProxyHasNoForwardedHeaders(t *testing.T) {
+	trustProxy = true
+	if err := setTrustedProxyCIDRs("10.0.0.0/8"); err != nil {
+		t.Fatalf("setTrustedProxyCIDRs() error = %v", err)
+	}
+	defer func() {
+		trustProxy = false
+		trustedProxyRanges = nil
+	}()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.1.2.3:12345"
+
+	if got := getClientIP(req); got != "10.1.2.3" {
+		t.Fatalf("getClientIP() = %q, want %q", got, "10.1.2.3")
+	}
+}
+
+func TestSetTrustedProxyCIDRsRejectsInvalidCIDR(t *testing.T) {
+	defer func() { trustedProxyRanges = nil }()
+
+	if err := setTrustedProxyCIDRs("not-a-cidr"); err == nil {
+		t.Fatal("setTrustedProxyCIDRs() error = nil, want invalid CIDR error")
 	}
 }
 
@@ -77,6 +129,9 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Error("X-Content-Type-Options header not set")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, antistaticTokenHeader) {
+		t.Errorf("Access-Control-Allow-Headers = %q, want %s", got, antistaticTokenHeader)
 	}
 }
 

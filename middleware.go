@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,6 +19,8 @@ const requestIDKey contextKey = "requestID"
 const maxRequestIDLength = 128
 const rateLimiterShardCount = 64
 const maxRateLimitClients = 65536
+
+var trustedProxyRanges []*net.IPNet
 
 func generateRequestID() string {
 	b := make([]byte, 8)
@@ -69,7 +72,7 @@ func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, X-Antistatic-Token")
 		w.Header().Set("Access-Control-Max-Age", "3600")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -215,8 +218,70 @@ func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	})
 }
 
+func setTrustedProxyCIDRs(value string) error {
+	if strings.TrimSpace(value) == "" {
+		trustedProxyRanges = nil
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	ranges := make([]*net.IPNet, 0, len(parts))
+	for _, part := range parts {
+		cidr := strings.TrimSpace(part)
+		if cidr == "" {
+			continue
+		}
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return fmt.Errorf("parse trusted proxy CIDR %q: %w", cidr, err)
+		}
+		ranges = append(ranges, network)
+	}
+
+	if len(ranges) == 0 {
+		return errors.New("trusted proxy CIDR list was empty")
+	}
+
+	trustedProxyRanges = ranges
+	return nil
+}
+
+func remoteIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		if parsed := net.ParseIP(r.RemoteAddr); parsed != nil {
+			return parsed.String()
+		}
+		return ""
+	}
+	return ip
+}
+
+func isTrustedProxy(ip string) bool {
+	if len(trustedProxyRanges) == 0 {
+		return false
+	}
+
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+
+	for _, network := range trustedProxyRanges {
+		if network.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
 func getClientIP(r *http.Request) string {
-	if trustProxy {
+	remote := remoteIP(r)
+	if remote == "" {
+		return ""
+	}
+
+	if trustProxy && isTrustedProxy(remote) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			ip := xff
 			if idx := strings.Index(xff, ","); idx != -1 {
@@ -236,14 +301,7 @@ func getClientIP(r *http.Request) string {
 		}
 	}
 
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		if parsed := net.ParseIP(r.RemoteAddr); parsed != nil {
-			return parsed.String()
-		}
-		return ""
-	}
-	return ip
+	return remote
 }
 
 func maxBytes(n int64) func(http.Handler) http.Handler {

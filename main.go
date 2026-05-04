@@ -34,6 +34,7 @@ var readTimeout = 15 * time.Second
 var writeTimeout = 15 * time.Second
 var idleTimeout = 60 * time.Second
 var trustProxy = false
+var trustedProxyCIDRs = ""
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	resp, _ := json.Marshal(handler.healthResponse())
@@ -62,7 +63,13 @@ func main() {
 	flag.DurationVar(&writeTimeout, "write-timeout", writeTimeout, "HTTP write timeout")
 	flag.DurationVar(&idleTimeout, "idle-timeout", idleTimeout, "HTTP idle timeout")
 	flag.BoolVar(&trustProxy, "trust-proxy", trustProxy, "Trust X-Forwarded-For and X-Real-IP headers")
+	flag.StringVar(&trustedProxyCIDRs, "trusted-proxy-cidrs", trustedProxyCIDRs, "Comma-separated CIDR allowlist for trusted reverse proxies")
 	flag.Parse()
+
+	if err := setTrustedProxyCIDRs(trustedProxyCIDRs); err != nil {
+		slog.Error("Invalid trusted proxy CIDRs", "error", err)
+		os.Exit(2)
+	}
 
 	if tlsPort <= 0 && useTLS {
 		tlsPort = 443
