@@ -143,6 +143,28 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
 }
 ```
 
+### Matchmaking Queue Measurements
+Waiting, matched, and canceled matchmaking responses include aggregate `queue` measurements for the same game version and queue:
+
+```json
+{
+  "status": "waiting",
+  "ticket": "ticket-id",
+  "ip": "198.51.100.10",
+  "port": 45860,
+  "token": "ticket-owner-token",
+  "queue": {
+    "players_waiting": 1,
+    "own_wait_ms": 12000,
+    "oldest_wait_ms": 12000,
+    "match_count": 4,
+    "average_match_wait_ms": 22000
+  }
+}
+```
+
+The queue data is privacy-preserving aggregate state only. It does not include other players' tickets, IPs, characters, or tokens.
+
 ### Matchmaking Matched Response
 ```json
 {
