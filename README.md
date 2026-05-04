@@ -103,7 +103,7 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
   "lobbies_created": 12,
   "successful_games_estimate": 8,
   "error_count": 1,
-  "version": "0.6.2"
+  "version": "0.6.3"
 }
 ```
 
