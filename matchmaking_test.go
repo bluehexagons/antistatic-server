@@ -66,11 +66,41 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	if response.Token == "" {
 		t.Fatalf("response token was empty")
 	}
+	if response.Queue == nil || response.Queue.PlayersWaiting != 1 {
+		t.Fatalf("queue stats = %#v, want one waiting player", response.Queue)
+	}
 	if len(h.Tickets) != 1 || len(h.Matches) != 0 {
 		t.Fatalf("handler maps = tickets:%d matches:%d, want 1/0", len(h.Tickets), len(h.Matches))
 	}
 	if got := h.Metrics.successfulGames.Load(); got != 0 {
 		t.Fatalf("successful games = %d, want 0", got)
+	}
+}
+
+func TestMatchmakingWaitingResponseIncludesQueueWaits(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	token := decodeMatchmakingResponse(t, first).Token
+
+	h.Mu.Lock()
+	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
+	ticket.CreatedAt = time.Now().Add(-12 * time.Second)
+	h.Mu.Unlock()
+
+	rec := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET returned status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	response := decodeMatchmakingResponse(t, rec)
+	if response.Queue == nil {
+		t.Fatalf("queue stats missing from waiting response")
+	}
+	if response.Queue.PlayersWaiting != 1 {
+		t.Fatalf("players waiting = %d, want 1", response.Queue.PlayersWaiting)
+	}
+	if response.Queue.OwnWaitMs < 11000 || response.Queue.OldestWaitMs < response.Queue.OwnWaitMs {
+		t.Fatalf("queue waits = %#v, want own wait around 12s and oldest at least own wait", response.Queue)
 	}
 }
 
@@ -174,6 +204,9 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 	if response.Match.Peer.Character != "Carbon" || response.Match.Self.Character != "Silicon" {
 		t.Fatalf("match characters = %#v, want Carbon vs Silicon", response.Match)
 	}
+	if response.Queue == nil || response.Queue.MatchCount != 1 || response.Queue.AverageMatchWaitMs < 0 {
+		t.Fatalf("queue stats after match = %#v, want recorded match stats", response.Queue)
+	}
 
 	h.Mu.RLock()
 	defer h.Mu.RUnlock()
@@ -202,6 +235,9 @@ func TestMatchmakingDoesNotMatchSameEndpoint(t *testing.T) {
 	response := decodeMatchmakingResponse(t, rec)
 	if response.Status != "waiting" {
 		t.Fatalf("same endpoint response = %#v, want waiting", response)
+	}
+	if response.Queue == nil || response.Queue.PlayersWaiting != 2 {
+		t.Fatalf("same endpoint queue stats = %#v, want two waiting players", response.Queue)
 	}
 	if len(h.Matches) != 0 || len(h.Tickets) != 2 {
 		t.Fatalf("maps = tickets:%d matches:%d, want 2/0", len(h.Tickets), len(h.Matches))

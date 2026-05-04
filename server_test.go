@@ -14,6 +14,7 @@ func newTestLobbyHandler() *lobbyHandler {
 		Tickets: map[string]*MatchmakingTicket{},
 		Waiting: map[string]map[string]*MatchmakingTicket{},
 		Matches: map[string]*Match{},
+		Queues:  map[string]*MatchmakingQueue{},
 	}
 }
 

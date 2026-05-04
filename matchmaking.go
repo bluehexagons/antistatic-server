@@ -42,6 +42,11 @@ type Match struct {
 	Players   [2]MatchParticipant
 }
 
+type MatchmakingQueue struct {
+	Matches            int64
+	AverageMatchWaitMs int64
+}
+
 type matchmakingPeer struct {
 	IP        string `json:"ip"`
 	Port      int    `json:"port"`
@@ -55,6 +60,14 @@ type matchmakingMatchResponse struct {
 	Self matchmakingPeer `json:"self"`
 }
 
+type matchmakingQueueResponse struct {
+	PlayersWaiting     int   `json:"players_waiting"`
+	OwnWaitMs          int64 `json:"own_wait_ms,omitempty"`
+	OldestWaitMs       int64 `json:"oldest_wait_ms,omitempty"`
+	MatchCount         int64 `json:"match_count,omitempty"`
+	AverageMatchWaitMs int64 `json:"average_match_wait_ms,omitempty"`
+}
+
 type matchmakingResponse struct {
 	Status string                    `json:"status"`
 	Ticket string                    `json:"ticket"`
@@ -62,6 +75,7 @@ type matchmakingResponse struct {
 	Port   int                       `json:"port"`
 	Token  string                    `json:"token,omitempty"`
 	Match  *matchmakingMatchResponse `json:"match,omitempty"`
+	Queue  *matchmakingQueueResponse `json:"queue,omitempty"`
 }
 
 type matchmakingRequest struct {
@@ -148,13 +162,45 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 	}
 }
 
-func matchmakingTicketResponse(status string, ticket *MatchmakingTicket) *matchmakingResponse {
+func (h *lobbyHandler) matchmakingQueueResponseLocked(ticket *MatchmakingTicket, now time.Time) *matchmakingQueueResponse {
+	h.ensureMatchmakingIndexesLocked()
+	queueKey := matchmakingQueueKey(ticket.Version, ticket.Queue)
+	response := &matchmakingQueueResponse{}
+
+	for _, other := range h.Waiting[queueKey] {
+		if other.MatchedID != "" || !other.waiting(now) {
+			continue
+		}
+		response.PlayersWaiting++
+		waitMs := maxInt64(0, now.Sub(other.CreatedAt).Milliseconds())
+		if waitMs > response.OldestWaitMs {
+			response.OldestWaitMs = waitMs
+		}
+	}
+
+	if ticket.MatchedID == "" {
+		response.OwnWaitMs = maxInt64(0, now.Sub(ticket.CreatedAt).Milliseconds())
+		if response.OwnWaitMs > response.OldestWaitMs {
+			response.OldestWaitMs = response.OwnWaitMs
+		}
+	}
+
+	if stats := h.Queues[queueKey]; stats != nil {
+		response.MatchCount = stats.Matches
+		response.AverageMatchWaitMs = stats.AverageMatchWaitMs
+	}
+
+	return response
+}
+
+func (h *lobbyHandler) matchmakingTicketResponseLocked(status string, ticket *MatchmakingTicket, now time.Time) *matchmakingResponse {
 	return &matchmakingResponse{
 		Status: status,
 		Ticket: ticket.ID,
 		IP:     ticket.IP,
 		Port:   ticket.Port,
 		Token:  ticket.Token,
+		Queue:  h.matchmakingQueueResponseLocked(ticket, now),
 	}
 }
 
@@ -166,7 +212,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 			return nil, http.StatusForbidden
 		}
 		if existing.Character != character {
-			return matchmakingTicketResponse("conflict", existing), http.StatusConflict
+			return h.matchmakingTicketResponseLocked("conflict", existing, now), http.StatusConflict
 		}
 
 		existing.IP = ip
@@ -180,7 +226,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 						match.Players[i].Port = port
 					}
 				}
-				resp := matchmakingTicketResponse("matched", existing)
+				resp := h.matchmakingTicketResponseLocked("matched", existing, now)
 				resp.Match = match.responseFor(existing.ID)
 				return resp, http.StatusOK
 			}
@@ -189,12 +235,12 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		match, other := h.findCompatibleMatchLocked(existing, now)
 		if match != nil {
 			h.registerMatchLocked(match, existing, other)
-			resp := matchmakingTicketResponse("matched", existing)
+			resp := h.matchmakingTicketResponseLocked("matched", existing, now)
 			resp.Match = match.responseFor(existing.ID)
 			return resp, http.StatusOK
 		}
 
-		return matchmakingTicketResponse("waiting", existing), http.StatusOK
+		return h.matchmakingTicketResponseLocked("waiting", existing, now), http.StatusOK
 	}
 
 	if len(h.Tickets) >= maxMatchmakingTickets || len(h.Matches) >= maxMatchmakingMatches {
@@ -223,14 +269,14 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		h.Tickets[key] = ticket
 		h.addWaitingTicketLocked(ticket)
 		h.registerMatchLocked(match, ticket, other)
-		resp := matchmakingTicketResponse("matched", ticket)
+		resp := h.matchmakingTicketResponseLocked("matched", ticket, now)
 		resp.Match = match.responseFor(ticket.ID)
 		return resp, http.StatusOK
 	}
 
 	h.Tickets[key] = ticket
 	h.addWaitingTicketLocked(ticket)
-	return matchmakingTicketResponse("waiting", ticket), http.StatusOK
+	return h.matchmakingTicketResponseLocked("waiting", ticket, now), http.StatusOK
 }
 
 func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now time.Time) (*Match, *MatchmakingTicket) {
@@ -301,8 +347,20 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	second.CheckedIn = match.CreatedAt
 	h.removeWaitingTicketLocked(first)
 	h.removeWaitingTicketLocked(second)
+	h.recordMatchmakingQueueWaitLocked(match, first, second)
 	h.Matches[match.ID] = match
 	h.Metrics.recordSuccessfulGame()
+}
+
+func (h *lobbyHandler) recordMatchmakingQueueWaitLocked(match *Match, first, second *MatchmakingTicket) {
+	queueKey := matchmakingQueueKey(match.Version, match.Queue)
+	if h.Queues[queueKey] == nil {
+		h.Queues[queueKey] = &MatchmakingQueue{}
+	}
+	stats := h.Queues[queueKey]
+	waitMs := maxInt64(0, (match.CreatedAt.Sub(first.CreatedAt).Milliseconds()+match.CreatedAt.Sub(second.CreatedAt).Milliseconds())/2)
+	stats.Matches++
+	stats.AverageMatchWaitMs += (waitMs - stats.AverageMatchWaitMs) / stats.Matches
 }
 
 func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, token string, now time.Time) (*matchmakingResponse, int) {
@@ -318,7 +376,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 
 	if ticket.MatchedID != "" {
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
-			resp := matchmakingTicketResponse("matched", ticket)
+			resp := h.matchmakingTicketResponseLocked("matched", ticket, now)
 			resp.Match = match.responseFor(ticket.ID)
 			return resp, http.StatusOK
 		}
@@ -331,7 +389,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 		return nil, http.StatusNotFound
 	}
 
-	return matchmakingTicketResponse("waiting", ticket), http.StatusOK
+	return h.matchmakingTicketResponseLocked("waiting", ticket, now), http.StatusOK
 }
 
 func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, token string) (*matchmakingResponse, int) {
@@ -345,7 +403,7 @@ func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, 
 		return nil, http.StatusForbidden
 	}
 
-	resp := matchmakingTicketResponse("canceled", ticket)
+	resp := h.matchmakingTicketResponseLocked("canceled", ticket, time.Now())
 
 	if ticket.MatchedID != "" {
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
@@ -364,6 +422,16 @@ func (h *lobbyHandler) ensureMatchmakingIndexesLocked() {
 	if h.Waiting == nil {
 		h.Waiting = make(map[string]map[string]*MatchmakingTicket)
 	}
+	if h.Queues == nil {
+		h.Queues = make(map[string]*MatchmakingQueue)
+	}
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (h *lobbyHandler) addWaitingTicketLocked(ticket *MatchmakingTicket) {

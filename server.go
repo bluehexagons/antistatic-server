@@ -39,6 +39,7 @@ type lobbyHandler struct {
 	Tickets  map[string]*MatchmakingTicket
 	Waiting  map[string]map[string]*MatchmakingTicket
 	Matches  map[string]*Match
+	Queues   map[string]*MatchmakingQueue
 	Metrics  serverMetrics
 	Ticker   *time.Ticker
 	Done     chan struct{}
@@ -310,6 +311,7 @@ var handler = &lobbyHandler{
 	Tickets: map[string]*MatchmakingTicket{},
 	Waiting: map[string]map[string]*MatchmakingTicket{},
 	Matches: map[string]*Match{},
+	Queues:  map[string]*MatchmakingQueue{},
 }
 
 const tickInterval = 5 * time.Minute
