@@ -103,9 +103,18 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
   "lobbies_created": 12,
   "successful_games_estimate": 8,
   "error_count": 1,
-  "version": "1.0.0"
+  "version": "0.6.1"
 }
 ```
+
+### Lobby Check-In PUT Body
+```json
+{
+  "local_ips": ["192.168.1.20", "10.0.0.20"]
+}
+```
+
+`local_ips` is optional. When present, entries are sanitized to private-scope addresses and only reflected to lobby peers seen from the same public IP.
 
 ### Lobby Check-In Response
 ```json
@@ -115,7 +124,8 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
     "members": [
       {
         "ip": "198.51.100.10",
-        "port": 45860
+        "port": 45860,
+        "local_ips": ["192.168.1.20"]
       }
     ],
     "version": "0.9.5"

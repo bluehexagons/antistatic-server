@@ -244,6 +244,9 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	if resp.LobbyCount != 1 || resp.MatchCount != 1 || resp.LobbiesCreated != 1 || resp.SuccessfulGamesEstimate != 1 || resp.ErrorCount != 1 {
 		t.Fatalf("health payload = %#v, want counters", resp)
 	}
+	if resp.Version != "0.6.1" {
+		t.Fatalf("health version = %q, want 0.6.1", resp.Version)
+	}
 }
 
 // TestLobbyLocalIPsRevealedOnlyToSamePublicIP verifies that LAN candidate
@@ -252,77 +255,77 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 // other public IPs. This is the privacy contract for the same-NAT tunneling
 // fallback.
 func TestLobbyLocalIPsRevealedOnlyToSamePublicIP(t *testing.T) {
-h := newTestLobbyHandler()
+	h := newTestLobbyHandler()
 
-body := `{"local_ips":["192.168.1.5","10.0.0.5"]}`
-rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "203.0.113.5:32000", "", body)
-if rec.Code != http.StatusOK {
-t.Fatalf("first PUT status = %d: %s", rec.Code, rec.Body.String())
-}
+	body := `{"local_ips":["192.168.1.5","10.0.0.5"]}`
+	rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "203.0.113.5:32000", "", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first PUT status = %d: %s", rec.Code, rec.Body.String())
+	}
 
-// Second peer behind same NAT (same public IP) should see the LAN IPs.
-rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45861", "203.0.113.5:32001", "", "")
-if rec.Code != http.StatusOK {
-t.Fatalf("same-NAT PUT status = %d: %s", rec.Code, rec.Body.String())
-}
-resp := decodeLobbyResponse(t, rec)
-var firstMember *MemberView
-for i := range resp.Lobby.Members {
-if resp.Lobby.Members[i].Port == 45860 {
-firstMember = &resp.Lobby.Members[i]
-}
-}
-if firstMember == nil {
-t.Fatalf("did not find member with port 45860 in response: %#v", resp.Lobby.Members)
-}
-if len(firstMember.LocalIPs) != 2 {
-t.Fatalf("same-NAT peer saw local_ips = %v, want both LAN addresses", firstMember.LocalIPs)
-}
+	// Second peer behind same NAT (same public IP) should see the LAN IPs.
+	rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45861", "203.0.113.5:32001", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("same-NAT PUT status = %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := decodeLobbyResponse(t, rec)
+	var firstMember *MemberView
+	for i := range resp.Lobby.Members {
+		if resp.Lobby.Members[i].Port == 45860 {
+			firstMember = &resp.Lobby.Members[i]
+		}
+	}
+	if firstMember == nil {
+		t.Fatalf("did not find member with port 45860 in response: %#v", resp.Lobby.Members)
+	}
+	if len(firstMember.LocalIPs) != 2 {
+		t.Fatalf("same-NAT peer saw local_ips = %v, want both LAN addresses", firstMember.LocalIPs)
+	}
 
-// Third peer on a different public IP must not see the LAN IPs.
-rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45862", "198.51.100.10:32002", "", "")
-if rec.Code != http.StatusOK {
-t.Fatalf("stranger PUT status = %d: %s", rec.Code, rec.Body.String())
-}
-resp = decodeLobbyResponse(t, rec)
-for _, m := range resp.Lobby.Members {
-if m.IP == "203.0.113.5" && m.LocalIPs != nil {
-t.Fatalf("stranger received local_ips %v from a peer behind a different NAT", m.LocalIPs)
-}
-}
+	// Third peer on a different public IP must not see the LAN IPs.
+	rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45862", "198.51.100.10:32002", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stranger PUT status = %d: %s", rec.Code, rec.Body.String())
+	}
+	resp = decodeLobbyResponse(t, rec)
+	for _, m := range resp.Lobby.Members {
+		if m.IP == "203.0.113.5" && m.LocalIPs != nil {
+			t.Fatalf("stranger received local_ips %v from a peer behind a different NAT", m.LocalIPs)
+		}
+	}
 }
 
 // TestLobbyRejectsMalformedCheckInBody guards against a malformed JSON body
 // being silently accepted. Empty body remains valid (older clients send none).
 func TestLobbyRejectsMalformedCheckInBody(t *testing.T) {
-h := newTestLobbyHandler()
-rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "", `{"local_ips":`)
-if rec.Code != http.StatusBadRequest {
-t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-}
+	h := newTestLobbyHandler()
+	rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "", `{"local_ips":`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
 }
 
 // TestLobbyDropsPublicLocalIPs verifies that a hostile or buggy client cannot
 // have public IPs propagated through the lobby; sanitizeLocalIPs filters them
 // out before storage.
 func TestLobbyDropsPublicLocalIPs(t *testing.T) {
-h := newTestLobbyHandler()
-body := `{"local_ips":["8.8.8.8","192.168.5.10"]}`
-rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "203.0.113.5:32000", "", body)
-if rec.Code != http.StatusOK {
-t.Fatalf("PUT status = %d", rec.Code)
-}
+	h := newTestLobbyHandler()
+	body := `{"local_ips":["8.8.8.8","192.168.5.10"]}`
+	rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "203.0.113.5:32000", "", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d", rec.Code)
+	}
 
-rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45861", "203.0.113.5:32001", "", "")
-resp := decodeLobbyResponse(t, rec)
-for _, m := range resp.Lobby.Members {
-if m.Port != 45860 {
-continue
-}
-for _, ip := range m.LocalIPs {
-if ip == "8.8.8.8" {
-t.Fatalf("public IP leaked through local_ips: %v", m.LocalIPs)
-}
-}
-}
+	rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45861", "203.0.113.5:32001", "", "")
+	resp := decodeLobbyResponse(t, rec)
+	for _, m := range resp.Lobby.Members {
+		if m.Port != 45860 {
+			continue
+		}
+		for _, ip := range m.LocalIPs {
+			if ip == "8.8.8.8" {
+				t.Fatalf("public IP leaked through local_ips: %v", m.LocalIPs)
+			}
+		}
+	}
 }

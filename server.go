@@ -67,7 +67,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		LobbiesCreated:          h.Metrics.lobbiesCreated.Load(),
 		SuccessfulGamesEstimate: h.Metrics.successfulGames.Load(),
 		ErrorCount:              h.Metrics.errors.Load(),
-		Version:                 "1.0.0",
+		Version:                 "0.6.1",
 	}
 	h.Mu.RUnlock()
 	return resp
