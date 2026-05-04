@@ -12,6 +12,7 @@ const matchmakingTicketTimeout = 30 * time.Second
 const matchmakingMatchTimeout = 2 * time.Minute
 const maxMatchmakingTickets = 20000
 const maxMatchmakingMatches = 10000
+const maxMatchmakingQueues = 10000
 
 type MatchmakingTicket struct {
 	ID        string    `json:"id"`
@@ -355,6 +356,9 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 func (h *lobbyHandler) recordMatchmakingQueueWaitLocked(match *Match, first, second *MatchmakingTicket) {
 	queueKey := matchmakingQueueKey(match.Version, match.Queue)
 	if h.Queues[queueKey] == nil {
+		if len(h.Queues) >= maxMatchmakingQueues {
+			return
+		}
 		h.Queues[queueKey] = &MatchmakingQueue{}
 	}
 	stats := h.Queues[queueKey]
