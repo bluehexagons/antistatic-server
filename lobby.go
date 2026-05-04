@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -19,6 +20,9 @@ type LobbySnapshot struct {
 }
 
 const maxLobbyMembers = 128
+
+var errLobbyMemberTokenMismatch = errors.New("lobby member token mismatch")
+var errLobbyFull = errors.New("lobby full")
 
 func (l *Lobby) Snapshot() *LobbySnapshot {
 	l.Mu.RLock()
@@ -53,38 +57,50 @@ func (l *Lobby) Clean() {
 	l.Members = valid
 }
 
-func (l *Lobby) CheckIn(ip string, port int) bool {
+func (l *Lobby) CheckIn(ip string, port int, token string) (string, error) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	for _, m := range l.Members {
 		if m.IP == ip && m.Port == port {
+			if token == "" || token != m.Token {
+				return "", errLobbyMemberTokenMismatch
+			}
 			m.CheckedIn = time.Now()
-			return true
+			return m.Token, nil
 		}
 	}
 	if len(l.Members) >= maxLobbyMembers {
-		return false
+		return "", errLobbyFull
+	}
+	memberToken, err := generateBearerToken()
+	if err != nil {
+		return "", err
 	}
 	l.Members = append(l.Members, &Member{
 		IP:        ip,
 		Port:      port,
+		Token:     memberToken,
 		CheckedIn: time.Now(),
 	})
-	return true
+	return memberToken, nil
 }
 
-func (l *Lobby) CheckOut(ip string, port int) {
+func (l *Lobby) CheckOut(ip string, port int, token string) error {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	for k, m := range l.Members {
 		if m.IP == ip && m.Port == port {
+			if token == "" || token != m.Token {
+				return errLobbyMemberTokenMismatch
+			}
 			if len(l.Members) > 1 {
 				l.Members[k] = l.Members[len(l.Members)-1]
 				l.Members = l.Members[:len(l.Members)-1]
 			} else {
 				l.Members = nil
 			}
-			return
+			return nil
 		}
 	}
+	return nil
 }

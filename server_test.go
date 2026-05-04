@@ -18,8 +18,15 @@ func newTestLobbyHandler() *lobbyHandler {
 }
 
 func serveLobbyRequest(h *lobbyHandler, method, target, remoteAddr string) *httptest.ResponseRecorder {
+	return serveLobbyRequestWithToken(h, method, target, remoteAddr, "")
+}
+
+func serveLobbyRequestWithToken(h *lobbyHandler, method, target, remoteAddr string, token string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, nil)
 	req.RemoteAddr = remoteAddr
+	if token != "" {
+		req.Header.Set(antistaticTokenHeader, token)
+	}
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
@@ -74,11 +81,17 @@ func TestVersionedLobbyCheckInIgnoresQueryString(t *testing.T) {
 	if response.IP != "198.51.100.10" || response.Port != 45860 {
 		t.Fatalf("response endpoint = %s:%d, want 198.51.100.10:45860", response.IP, response.Port)
 	}
+	if response.Token == "" {
+		t.Fatalf("response token was empty")
+	}
 	if response.Lobby == nil || response.Lobby.Version != "0.9.5" {
 		t.Fatalf("response lobby version = %#v, want 0.9.5", response.Lobby)
 	}
 	if len(response.Lobby.Members) != 1 || response.Lobby.Members[0].IP != "198.51.100.10" {
 		t.Fatalf("response members = %#v, want one checked-in member", response.Lobby.Members)
+	}
+	if response.Lobby.Members[0].Token != "" {
+		t.Fatalf("member token leaked in lobby snapshot")
 	}
 }
 
@@ -147,6 +160,50 @@ func TestLobbyAcceptsIPv6RemoteAddress(t *testing.T) {
 	response := decodeLobbyResponse(t, rec)
 	if response.IP != "2001:db8::1" || response.Port != 45860 {
 		t.Fatalf("response endpoint = %s:%d, want 2001:db8::1:45860", response.IP, response.Port)
+	}
+}
+
+func TestLobbyRefreshRequiresMemberToken(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
+	token := decodeLobbyResponse(t, first).Token
+
+	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("refresh without token status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	rec = serveLobbyRequestWithToken(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh with token status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+func TestLobbyDeleteRequiresMemberToken(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
+	token := decodeLobbyResponse(t, first).Token
+
+	rec := serveLobbyRequestWithToken(h, http.MethodDelete, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "wrong-token")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("DELETE with wrong token status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	h.Mu.RLock()
+	if len(h.Lobbies["ABC123"].Members) != 1 {
+		t.Fatalf("member was removed by wrong-token delete")
+	}
+	h.Mu.RUnlock()
+
+	rec = serveLobbyRequestWithToken(h, http.MethodDelete, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE with token status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	h.Mu.RLock()
+	_, ok := h.Lobbies["ABC123"]
+	h.Mu.RUnlock()
+	if ok {
+		t.Fatalf("lobby remained after authorized delete")
 	}
 }
 

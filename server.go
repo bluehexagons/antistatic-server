@@ -118,6 +118,7 @@ type lobbyResponse struct {
 	Lobby *LobbySnapshot `json:"lobby"`
 	IP    string         `json:"ip"`
 	Port  int            `json:"port"`
+	Token string         `json:"token,omitempty"`
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +193,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "key", key, "version", version)
+		token := r.Header.Get(antistaticTokenHeader)
 
 		h.Mu.Lock()
 		l, ok := h.Lobbies[key]
@@ -218,15 +220,33 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			l.Clean()
 		}
 
+		memberToken := token
 		switch r.Method {
 		case "PUT":
-			if !l.CheckIn(ip, port) {
+			var err error
+			memberToken, err = l.CheckIn(ip, port, token)
+			if err == errLobbyMemberTokenMismatch {
+				h.Mu.Unlock()
+				h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
+				return
+			}
+			if err == errLobbyFull {
 				h.Mu.Unlock()
 				h.respondError(w, "Lobby full", http.StatusServiceUnavailable)
 				return
 			}
+			if err != nil {
+				h.Mu.Unlock()
+				h.respondError(w, "Internal error", http.StatusInternalServerError)
+				slog.Error("Lobby token generation failed", "requestID", getRequestID(r), "error", err)
+				return
+			}
 		case "DELETE":
-			l.CheckOut(ip, port)
+			if err := l.CheckOut(ip, port, token); err == errLobbyMemberTokenMismatch {
+				h.Mu.Unlock()
+				h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
+				return
+			}
 			if len(l.Members) == 0 {
 				delete(h.Lobbies, key)
 				slog.Info("Lobby emptied", "key", key)
@@ -240,6 +260,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Lobby: snapshot,
 			IP:    ip,
 			Port:  port,
+			Token: memberToken,
 		})
 		if err != nil {
 			h.respondError(w, "Internal error", http.StatusInternalServerError)

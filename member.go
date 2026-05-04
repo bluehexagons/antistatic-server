@@ -5,6 +5,7 @@ import "time"
 type Member struct {
 	IP        string    `json:"ip"`
 	Port      int       `json:"port"`
+	Token     string    `json:"-"`
 	CheckedIn time.Time `json:"-"`
 }
 

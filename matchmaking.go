@@ -19,6 +19,7 @@ type MatchmakingTicket struct {
 	Queue     string    `json:"queue"`
 	IP        string    `json:"ip"`
 	Port      int       `json:"port"`
+	Token     string    `json:"-"`
 	Character string    `json:"character"`
 	CreatedAt time.Time `json:"created_at"`
 	CheckedIn time.Time `json:"checked_in"`
@@ -59,6 +60,7 @@ type matchmakingResponse struct {
 	Ticket string                    `json:"ticket"`
 	IP     string                    `json:"ip"`
 	Port   int                       `json:"port"`
+	Token  string                    `json:"token,omitempty"`
 	Match  *matchmakingMatchResponse `json:"match,omitempty"`
 }
 
@@ -146,17 +148,25 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 	}
 }
 
-func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, character string, now time.Time) (*matchmakingResponse, int) {
+func matchmakingTicketResponse(status string, ticket *MatchmakingTicket) *matchmakingResponse {
+	return &matchmakingResponse{
+		Status: status,
+		Ticket: ticket.ID,
+		IP:     ticket.IP,
+		Port:   ticket.Port,
+		Token:  ticket.Token,
+	}
+}
+
+func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, character, token string, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if existing, ok := h.Tickets[key]; ok {
+		if token == "" || token != existing.Token {
+			return nil, http.StatusForbidden
+		}
 		if existing.Character != character {
-			return &matchmakingResponse{
-				Status: "conflict",
-				Ticket: existing.ID,
-				IP:     existing.IP,
-				Port:   existing.Port,
-			}, http.StatusConflict
+			return matchmakingTicketResponse("conflict", existing), http.StatusConflict
 		}
 
 		existing.IP = ip
@@ -170,38 +180,30 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 						match.Players[i].Port = port
 					}
 				}
-				return &matchmakingResponse{
-					Status: "matched",
-					Ticket: existing.ID,
-					IP:     existing.IP,
-					Port:   existing.Port,
-					Match:  match.responseFor(existing.ID),
-				}, http.StatusOK
+				resp := matchmakingTicketResponse("matched", existing)
+				resp.Match = match.responseFor(existing.ID)
+				return resp, http.StatusOK
 			}
 		}
 
 		match, other := h.findCompatibleMatchLocked(existing, now)
 		if match != nil {
 			h.registerMatchLocked(match, existing, other)
-			return &matchmakingResponse{
-				Status: "matched",
-				Ticket: existing.ID,
-				IP:     existing.IP,
-				Port:   existing.Port,
-				Match:  match.responseFor(existing.ID),
-			}, http.StatusOK
+			resp := matchmakingTicketResponse("matched", existing)
+			resp.Match = match.responseFor(existing.ID)
+			return resp, http.StatusOK
 		}
 
-		return &matchmakingResponse{
-			Status: "waiting",
-			Ticket: existing.ID,
-			IP:     existing.IP,
-			Port:   existing.Port,
-		}, http.StatusOK
+		return matchmakingTicketResponse("waiting", existing), http.StatusOK
 	}
 
 	if len(h.Tickets) >= maxMatchmakingTickets || len(h.Matches) >= maxMatchmakingMatches {
 		return nil, http.StatusServiceUnavailable
+	}
+
+	ticketToken, err := generateBearerToken()
+	if err != nil {
+		return nil, http.StatusInternalServerError
 	}
 
 	ticket := &MatchmakingTicket{
@@ -210,6 +212,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		Queue:     queue,
 		IP:        ip,
 		Port:      port,
+		Token:     ticketToken,
 		Character: character,
 		CreatedAt: now,
 		CheckedIn: now,
@@ -220,23 +223,14 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		h.Tickets[key] = ticket
 		h.addWaitingTicketLocked(ticket)
 		h.registerMatchLocked(match, ticket, other)
-		return &matchmakingResponse{
-			Status: "matched",
-			Ticket: ticket.ID,
-			IP:     ticket.IP,
-			Port:   ticket.Port,
-			Match:  match.responseFor(ticket.ID),
-		}, http.StatusOK
+		resp := matchmakingTicketResponse("matched", ticket)
+		resp.Match = match.responseFor(ticket.ID)
+		return resp, http.StatusOK
 	}
 
 	h.Tickets[key] = ticket
 	h.addWaitingTicketLocked(ticket)
-	return &matchmakingResponse{
-		Status: "waiting",
-		Ticket: ticket.ID,
-		IP:     ticket.IP,
-		Port:   ticket.Port,
-	}, http.StatusOK
+	return matchmakingTicketResponse("waiting", ticket), http.StatusOK
 }
 
 func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now time.Time) (*Match, *MatchmakingTicket) {
@@ -311,23 +305,22 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	h.Metrics.recordSuccessfulGame()
 }
 
-func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, now time.Time) (*matchmakingResponse, int) {
+func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, token string, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	ticket, ok := h.Tickets[key]
 	if !ok {
 		return nil, http.StatusNotFound
 	}
+	if token == "" || token != ticket.Token {
+		return nil, http.StatusForbidden
+	}
 
 	if ticket.MatchedID != "" {
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
-			return &matchmakingResponse{
-				Status: "matched",
-				Ticket: ticket.ID,
-				IP:     ticket.IP,
-				Port:   ticket.Port,
-				Match:  match.responseFor(ticket.ID),
-			}, http.StatusOK
+			resp := matchmakingTicketResponse("matched", ticket)
+			resp.Match = match.responseFor(ticket.ID)
+			return resp, http.StatusOK
 		}
 		h.deleteTicketLocked(version, queue, ticketID)
 		return nil, http.StatusNotFound
@@ -338,28 +331,21 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, n
 		return nil, http.StatusNotFound
 	}
 
-	return &matchmakingResponse{
-		Status: "waiting",
-		Ticket: ticket.ID,
-		IP:     ticket.IP,
-		Port:   ticket.Port,
-	}, http.StatusOK
+	return matchmakingTicketResponse("waiting", ticket), http.StatusOK
 }
 
-func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string) (*matchmakingResponse, int) {
+func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, token string) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	ticket, ok := h.Tickets[key]
 	if !ok {
 		return nil, http.StatusNoContent
 	}
-
-	resp := &matchmakingResponse{
-		Status: "canceled",
-		Ticket: ticket.ID,
-		IP:     ticket.IP,
-		Port:   ticket.Port,
+	if token == "" || token != ticket.Token {
+		return nil, http.StatusForbidden
 	}
+
+	resp := matchmakingTicketResponse("canceled", ticket)
 
 	if ticket.MatchedID != "" {
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
@@ -444,6 +430,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 
 	now := time.Now()
+	token := r.Header.Get(antistaticTokenHeader)
 
 	h.Mu.Lock()
 	var resp *matchmakingResponse
@@ -451,11 +438,11 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 
 	switch r.Method {
 	case http.MethodGet:
-		resp, status = h.matchmakingStateLocked(version, queue, ticket, now)
+		resp, status = h.matchmakingStateLocked(version, queue, ticket, token, now)
 	case http.MethodPut:
-		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Character, now)
+		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Character, token, now)
 	case http.MethodDelete:
-		resp, status = h.cancelMatchmakingLocked(version, queue, ticket)
+		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token)
 	default:
 		status = http.StatusMethodNotAllowed
 	}
@@ -477,6 +464,10 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		}
 		if status == http.StatusMethodNotAllowed {
 			h.respondError(w, "Method not allowed", status)
+			return
+		}
+		if status == http.StatusForbidden {
+			h.respondError(w, "Invalid matchmaking ticket token", status)
 			return
 		}
 		h.respondError(w, "Internal error", http.StatusInternalServerError)

@@ -10,6 +10,10 @@ import (
 )
 
 func serveMatchmakingRequest(h *lobbyHandler, method, target, remoteAddr string, body any) *httptest.ResponseRecorder {
+	return serveMatchmakingRequestWithToken(h, method, target, remoteAddr, body, "")
+}
+
+func serveMatchmakingRequestWithToken(h *lobbyHandler, method, target, remoteAddr string, body any, token string) *httptest.ResponseRecorder {
 	var reader *bytes.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -23,6 +27,9 @@ func serveMatchmakingRequest(h *lobbyHandler, method, target, remoteAddr string,
 
 	req := httptest.NewRequest(method, target, reader)
 	req.RemoteAddr = remoteAddr
+	if token != "" {
+		req.Header.Set(antistaticTokenHeader, token)
+	}
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
@@ -56,6 +63,9 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	if response.Ticket != "TicketA" || response.IP != "198.51.100.10" || response.Port != 45860 {
 		t.Fatalf("response = %#v, want ticket/IP/port preserved", response)
 	}
+	if response.Token == "" {
+		t.Fatalf("response token was empty")
+	}
 	if len(h.Tickets) != 1 || len(h.Matches) != 0 {
 		t.Fatalf("handler maps = tickets:%d matches:%d, want 1/0", len(h.Tickets), len(h.Matches))
 	}
@@ -66,7 +76,8 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 
 func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 	h := newTestLobbyHandler()
-	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	token := decodeMatchmakingResponse(t, first).Token
 
 	key := matchmakingTicketKey("0.9.5", "default", "TicketA")
 	h.Mu.Lock()
@@ -74,7 +85,7 @@ func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 	before := h.Tickets[key].CheckedIn
 	h.Mu.Unlock()
 
-	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"}, token)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("refresh returned status %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -93,14 +104,16 @@ func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 
 func TestMatchmakingRefreshUpdatesEndpoint(t *testing.T) {
 	h := newTestLobbyHandler()
-	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	token := decodeMatchmakingResponse(t, first).Token
 
-	rec := serveMatchmakingRequest(
+	rec := serveMatchmakingRequestWithToken(
 		h,
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketA/45861",
 		"198.51.100.11:32000",
 		matchmakingRequest{Character: "Carbon"},
+		token,
 	)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("refresh returned status %d, want %d", rec.Code, http.StatusOK)
@@ -111,6 +124,30 @@ func TestMatchmakingRefreshUpdatesEndpoint(t *testing.T) {
 	h.Mu.RUnlock()
 	if ticket.IP != "198.51.100.11" || ticket.Port != 45861 {
 		t.Fatalf("ticket endpoint = %s:%d, want 198.51.100.11:45861", ticket.IP, ticket.Port)
+	}
+}
+
+func TestMatchmakingRefreshRejectsWrongToken(t *testing.T) {
+	h := newTestLobbyHandler()
+	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+
+	rec := serveMatchmakingRequestWithToken(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketA/45861",
+		"198.51.100.11:32000",
+		matchmakingRequest{Character: "Carbon"},
+		"wrong-token",
+	)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("refresh with wrong token returned status %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	h.Mu.RLock()
+	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
+	h.Mu.RUnlock()
+	if ticket.IP != "198.51.100.10" || ticket.Port != 45860 {
+		t.Fatalf("ticket endpoint changed to %s:%d after wrong-token refresh", ticket.IP, ticket.Port)
 	}
 }
 
@@ -173,8 +210,9 @@ func TestMatchmakingDoesNotMatchSameEndpoint(t *testing.T) {
 
 func TestMatchmakingDeleteRemovesWaitingTicket(t *testing.T) {
 	h := newTestLobbyHandler()
-	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
-	rec := serveMatchmakingRequest(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil)
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	token := decodeMatchmakingResponse(t, first).Token
+	rec := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("DELETE returned %d, want %d", rec.Code, http.StatusOK)
@@ -189,6 +227,38 @@ func TestMatchmakingDeleteRemovesWaitingTicket(t *testing.T) {
 	defer h.Mu.RUnlock()
 	if len(h.Tickets) != 0 || len(h.Matches) != 0 {
 		t.Fatalf("maps not cleared after delete: tickets=%d matches=%d", len(h.Tickets), len(h.Matches))
+	}
+}
+
+func TestMatchmakingDeleteRejectsWrongToken(t *testing.T) {
+	h := newTestLobbyHandler()
+	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	rec := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, "wrong-token")
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("DELETE with wrong token returned %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	h.Mu.RLock()
+	defer h.Mu.RUnlock()
+	if len(h.Tickets) != 1 {
+		t.Fatalf("ticket count = %d, want 1 after rejected delete", len(h.Tickets))
+	}
+}
+
+func TestMatchmakingStateRejectsWrongToken(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	token := decodeMatchmakingResponse(t, first).Token
+
+	rec := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, "wrong-token")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("GET with wrong token returned %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	rec = serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET with correct token returned %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
