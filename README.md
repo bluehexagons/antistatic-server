@@ -139,9 +139,12 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
 ### Matchmaking PUT Body
 ```json
 {
-  "character": "Carbon"
+  "character": "Carbon",
+  "local_ips": ["192.168.1.20", "10.0.0.20"]
 }
 ```
+
+`local_ips` is optional for matchmaking too. Entries are sanitized to private-scope addresses and only reflected to matched peers seen from the same public IP, allowing same-NAT or same-host clients to try LAN/loopback tunnel candidates without exposing LAN addresses to unrelated WAN peers.
 
 ### Matchmaking Queue Measurements
 Waiting, matched, and canceled matchmaking responses include aggregate `queue` measurements for the same game version and queue:

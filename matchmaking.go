@@ -22,6 +22,7 @@ type MatchmakingTicket struct {
 	Port      int       `json:"port"`
 	Token     string    `json:"-"`
 	Character string    `json:"character"`
+	LocalIPs  []string  `json:"local_ips,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	CheckedIn time.Time `json:"checked_in"`
 	MatchedID string    `json:"matched_id"`
@@ -32,6 +33,7 @@ type MatchParticipant struct {
 	IP        string
 	Port      int
 	Character string
+	LocalIPs  []string
 	Role      string
 }
 
@@ -49,9 +51,10 @@ type MatchmakingQueue struct {
 }
 
 type matchmakingPeer struct {
-	IP        string `json:"ip"`
-	Port      int    `json:"port"`
-	Character string `json:"character"`
+	IP        string   `json:"ip"`
+	Port      int      `json:"port"`
+	Character string   `json:"character"`
+	LocalIPs  []string `json:"local_ips,omitempty"`
 }
 
 type matchmakingMatchResponse struct {
@@ -80,7 +83,8 @@ type matchmakingResponse struct {
 }
 
 type matchmakingRequest struct {
-	Character string `json:"character"`
+	Character string   `json:"character"`
+	LocalIPs  []string `json:"local_ips,omitempty"`
 }
 
 func matchmakingTicketKey(version, queue, ticket string) string {
@@ -120,7 +124,7 @@ func (m *Match) responseFor(ticketID string) *matchmakingMatchResponse {
 		return nil
 	}
 
-	return &matchmakingMatchResponse{
+	response := &matchmakingMatchResponse{
 		ID:   m.ID,
 		Role: self.Role,
 		Self: matchmakingPeer{
@@ -134,6 +138,10 @@ func (m *Match) responseFor(ticketID string) *matchmakingMatchResponse {
 			Character: peer.Character,
 		},
 	}
+	if self.IP != "" && self.IP == peer.IP && len(peer.LocalIPs) > 0 {
+		response.Peer.LocalIPs = append(response.Peer.LocalIPs, peer.LocalIPs...)
+	}
+	return response
 }
 
 func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
@@ -205,7 +213,7 @@ func (h *lobbyHandler) matchmakingTicketResponseLocked(status string, ticket *Ma
 	}
 }
 
-func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, character, token string, now time.Time) (*matchmakingResponse, int) {
+func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, character, token string, localIPs []string, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if existing, ok := h.Tickets[key]; ok {
@@ -218,6 +226,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 
 		existing.IP = ip
 		existing.Port = port
+		existing.LocalIPs = localIPs
 		existing.CheckedIn = now
 		if existing.MatchedID != "" {
 			if match, ok := h.Matches[existing.MatchedID]; ok {
@@ -261,6 +270,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		Port:      port,
 		Token:     ticketToken,
 		Character: character,
+		LocalIPs:  localIPs,
 		CreatedAt: now,
 		CheckedIn: now,
 	}
@@ -306,27 +316,17 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 		first, second = candidate, ticket
 	}
 
+	firstParticipant := first.participantForMatch()
+	firstParticipant.Role = "host"
+	secondParticipant := second.participantForMatch()
+	secondParticipant.Role = "client"
+
 	match := &Match{
 		ID:        matchmakingMatchID(ticket.Version, ticket.Queue, first.participantForMatch(), second.participantForMatch()),
 		Version:   ticket.Version,
 		Queue:     ticket.Queue,
 		CreatedAt: now,
-		Players: [2]MatchParticipant{
-			{
-				TicketID:  first.ID,
-				IP:        first.IP,
-				Port:      first.Port,
-				Character: first.Character,
-				Role:      "host",
-			},
-			{
-				TicketID:  second.ID,
-				IP:        second.IP,
-				Port:      second.Port,
-				Character: second.Character,
-				Role:      "client",
-			},
-		},
+		Players:   [2]MatchParticipant{firstParticipant, secondParticipant},
 	}
 
 	return match, candidate
@@ -338,6 +338,7 @@ func (t *MatchmakingTicket) participantForMatch() MatchParticipant {
 		IP:        t.IP,
 		Port:      t.Port,
 		Character: t.Character,
+		LocalIPs:  append([]string(nil), t.LocalIPs...),
 	}
 }
 
@@ -499,6 +500,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 			h.respondError(w, "Invalid matchmaking character", http.StatusBadRequest)
 			return
 		}
+		request.LocalIPs = sanitizeLocalIPs(request.LocalIPs)
 	}
 
 	now := time.Now()
@@ -512,7 +514,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	case http.MethodGet:
 		resp, status = h.matchmakingStateLocked(version, queue, ticket, token, now)
 	case http.MethodPut:
-		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Character, token, now)
+		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Character, token, request.LocalIPs, now)
 	case http.MethodDelete:
 		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token)
 	default:

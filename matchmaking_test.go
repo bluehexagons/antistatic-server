@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -220,6 +221,62 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 		if ticket.MatchedID == "" {
 			t.Fatalf("waiting ticket remained after match: %#v", ticket)
 		}
+	}
+}
+
+func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequest(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketA/45860",
+		"203.0.113.5:32000",
+		matchmakingRequest{Character: "Carbon", LocalIPs: []string{"8.8.8.8", "192.168.1.20"}},
+	)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first PUT returned %d", first.Code)
+	}
+
+	second := serveMatchmakingRequest(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketB/45861",
+		"203.0.113.5:32001",
+		matchmakingRequest{Character: "Silicon", LocalIPs: []string{"10.0.0.20"}},
+	)
+	response := decodeMatchmakingResponse(t, second)
+	if response.Status != "matched" || response.Match == nil {
+		t.Fatalf("response = %#v, want matched with peer data", response)
+	}
+	if !reflect.DeepEqual(response.Match.Peer.LocalIPs, []string{"192.168.1.20"}) {
+		t.Fatalf("same-public-IP peer local_ips = %v, want sanitized LAN IP", response.Match.Peer.LocalIPs)
+	}
+
+	third := serveMatchmakingRequest(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketC/45862",
+		"203.0.113.6:32002",
+		matchmakingRequest{Character: "Carbon", LocalIPs: []string{"192.168.2.20"}},
+	)
+	if third.Code != http.StatusOK {
+		t.Fatalf("third PUT returned %d", third.Code)
+	}
+
+	fourth := serveMatchmakingRequest(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketD/45863",
+		"203.0.113.7:32003",
+		matchmakingRequest{Character: "Silicon", LocalIPs: []string{"192.168.3.20"}},
+	)
+	response = decodeMatchmakingResponse(t, fourth)
+	if response.Status != "matched" || response.Match == nil {
+		t.Fatalf("cross-public-IP response = %#v, want matched with peer data", response)
+	}
+	if response.Match.Peer.LocalIPs != nil {
+		t.Fatalf("different-public-IP peer local_ips = %v, want nil", response.Match.Peer.LocalIPs)
 	}
 }
 
