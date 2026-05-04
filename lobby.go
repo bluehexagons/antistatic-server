@@ -18,6 +18,8 @@ type LobbySnapshot struct {
 	Version string    `json:"version"`
 }
 
+const maxLobbyMembers = 128
+
 func (l *Lobby) Snapshot() *LobbySnapshot {
 	l.Mu.RLock()
 	defer l.Mu.RUnlock()
@@ -51,20 +53,24 @@ func (l *Lobby) Clean() {
 	l.Members = valid
 }
 
-func (l *Lobby) CheckIn(ip string, port int) {
+func (l *Lobby) CheckIn(ip string, port int) bool {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	for _, m := range l.Members {
 		if m.IP == ip && m.Port == port {
 			m.CheckedIn = time.Now()
-			return
+			return true
 		}
+	}
+	if len(l.Members) >= maxLobbyMembers {
+		return false
 	}
 	l.Members = append(l.Members, &Member{
 		IP:        ip,
 		Port:      port,
 		CheckedIn: time.Now(),
 	})
+	return true
 }
 
 func (l *Lobby) CheckOut(ip string, port int) {

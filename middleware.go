@@ -15,6 +15,9 @@ import (
 type contextKey string
 
 const requestIDKey contextKey = "requestID"
+const maxRequestIDLength = 128
+const rateLimiterShardCount = 64
+const maxRateLimitClients = 65536
 
 func generateRequestID() string {
 	b := make([]byte, 8)
@@ -27,13 +30,32 @@ func generateRequestID() string {
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
-		if requestID == "" {
+		if !validRequestID(requestID) {
 			requestID = generateRequestID()
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func validRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDLength {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			continue
+		}
+		switch c {
+		case '.', '-', '_', ':':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func getRequestID(r *http.Request) string {
@@ -47,7 +69,7 @@ func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID")
 		w.Header().Set("Access-Control-Max-Age", "3600")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -73,27 +95,33 @@ func withTimeout(timeout time.Duration) func(http.Handler) http.Handler {
 }
 
 type rateLimiter struct {
-	mu       sync.Mutex
-	clients  map[string]*bucket
-	rate     int
-	burst    int
+	shards   [rateLimiterShardCount]rateLimiterShard
+	rate     float64
+	burst    float64
 	interval time.Duration
 	stop     chan struct{}
 	stopOnce sync.Once
 }
 
+type rateLimiterShard struct {
+	mu      sync.Mutex
+	clients map[string]*bucket
+}
+
 type bucket struct {
-	tokens   int
+	tokens   float64
 	lastSeen time.Time
 }
 
 func newRateLimiter(rate, burst int, interval time.Duration) *rateLimiter {
 	rl := &rateLimiter{
-		clients:  make(map[string]*bucket),
-		rate:     rate,
-		burst:    burst,
+		rate:     float64(rate),
+		burst:    float64(burst),
 		interval: interval,
 		stop:     make(chan struct{}),
+	}
+	for i := range rl.shards {
+		rl.shards[i].clients = make(map[string]*bucket)
 	}
 	go func() {
 		ticker := time.NewTicker(interval * 10)
@@ -117,44 +145,59 @@ func (rl *rateLimiter) Stop() {
 }
 
 func (rl *rateLimiter) cleanup() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
 	now := time.Now()
-	for ip, b := range rl.clients {
-		if now.Sub(b.lastSeen) > rl.interval*10 {
-			delete(rl.clients, ip)
+	for i := range rl.shards {
+		shard := &rl.shards[i]
+		shard.mu.Lock()
+		for ip, b := range shard.clients {
+			if now.Sub(b.lastSeen) > rl.interval*10 {
+				delete(shard.clients, ip)
+			}
 		}
+		shard.mu.Unlock()
 	}
 }
 
 func (rl *rateLimiter) allow(ip string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	shard := rl.shard(ip)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
 
 	now := time.Now()
-	b, exists := rl.clients[ip]
+	b, exists := shard.clients[ip]
 	if !exists {
+		if len(shard.clients) >= maxRateLimitClients/rateLimiterShardCount {
+			return false
+		}
 		b = &bucket{
 			tokens:   rl.burst - 1,
 			lastSeen: now,
 		}
-		rl.clients[ip] = b
+		shard.clients[ip] = b
 		return true
 	}
 
 	elapsed := now.Sub(b.lastSeen)
-	tokensToAdd := int(elapsed / rl.interval)
-	b.tokens += tokensToAdd
+	b.tokens += elapsed.Seconds() * rl.rate / rl.interval.Seconds()
 	if b.tokens > rl.burst {
 		b.tokens = rl.burst
 	}
 	b.lastSeen = now
 
-	if b.tokens > 0 {
+	if b.tokens >= 1 {
 		b.tokens--
 		return true
 	}
 	return false
+}
+
+func (rl *rateLimiter) shard(ip string) *rateLimiterShard {
+	var h uint32 = 2166136261
+	for i := 0; i < len(ip); i++ {
+		h ^= uint32(ip[i])
+		h *= 16777619
+	}
+	return &rl.shards[h%rateLimiterShardCount]
 }
 
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
@@ -195,7 +238,10 @@ func getClientIP(r *http.Request) string {
 
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		if parsed := net.ParseIP(r.RemoteAddr); parsed != nil {
+			return parsed.String()
+		}
+		return ""
 	}
 	return ip
 }

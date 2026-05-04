@@ -34,6 +34,15 @@ func TestGetClientIP(t *testing.T) {
 	}
 }
 
+func TestGetClientIPRejectsMalformedRemoteAddr(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "not-an-ip"
+
+	if got := getClientIP(req); got != "" {
+		t.Fatalf("getClientIP() = %q, want empty string", got)
+	}
+}
+
 func TestRateLimiter(t *testing.T) {
 	rl := newRateLimiter(2, 2, time.Second)
 	defer rl.Stop()
@@ -116,5 +125,23 @@ func TestRequestIDMiddlewareWithExisting(t *testing.T) {
 
 	if rec.Header().Get("X-Request-ID") != existingID {
 		t.Errorf("X-Request-ID = %q, want %q", rec.Header().Get("X-Request-ID"), existingID)
+	}
+}
+
+func TestRequestIDMiddlewareRejectsUnsafeExistingID(t *testing.T) {
+	existingID := "bad\nid"
+	handler := requestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if getRequestID(r) == existingID {
+			t.Error("unsafe request ID should be replaced")
+		}
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Request-ID", existingID)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Header().Get("X-Request-ID") == existingID {
+		t.Error("unsafe X-Request-ID header should be replaced")
 	}
 }

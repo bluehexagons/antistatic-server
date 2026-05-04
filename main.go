@@ -36,19 +36,7 @@ var idleTimeout = 60 * time.Second
 var trustProxy = false
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	handler.Mu.RLock()
-	lobbyCount := len(handler.Lobbies)
-	ticketCount := len(handler.Tickets)
-	matchCount := len(handler.Matches)
-	handler.Mu.RUnlock()
-
-	resp, _ := json.Marshal(map[string]any{
-		"status":       "ok",
-		"lobby_count":  lobbyCount,
-		"ticket_count": ticketCount,
-		"match_count":  matchCount,
-		"version":      "1.0.0",
-	})
+	resp, _ := json.Marshal(handler.healthResponse())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(resp)

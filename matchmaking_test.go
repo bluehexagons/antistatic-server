@@ -59,6 +59,9 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	if len(h.Tickets) != 1 || len(h.Matches) != 0 {
 		t.Fatalf("handler maps = tickets:%d matches:%d, want 1/0", len(h.Tickets), len(h.Matches))
 	}
+	if got := h.Metrics.successfulGames.Load(); got != 0 {
+		t.Fatalf("successful games = %d, want 0", got)
+	}
 }
 
 func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
@@ -140,6 +143,9 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 	if len(h.Matches) != 1 {
 		t.Fatalf("match count = %d, want 1", len(h.Matches))
 	}
+	if got := h.Metrics.successfulGames.Load(); got != 1 {
+		t.Fatalf("successful games = %d, want 1", got)
+	}
 	for _, ticket := range h.Tickets {
 		if ticket.MatchedID == "" {
 			t.Fatalf("waiting ticket remained after match: %#v", ticket)
@@ -214,5 +220,8 @@ func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 	rec = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Bad;Character"})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid character status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if got := h.Metrics.errors.Load(); got == 0 {
+		t.Fatalf("error counter = %d, want > 0", got)
 	}
 }

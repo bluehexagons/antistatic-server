@@ -10,6 +10,8 @@ import (
 
 const matchmakingTicketTimeout = 30 * time.Second
 const matchmakingMatchTimeout = 2 * time.Minute
+const maxMatchmakingTickets = 20000
+const maxMatchmakingMatches = 10000
 
 type MatchmakingTicket struct {
 	ID        string    `json:"id"`
@@ -68,6 +70,10 @@ func matchmakingTicketKey(version, queue, ticket string) string {
 	return strings.Join([]string{version, queue, ticket}, "|")
 }
 
+func matchmakingQueueKey(version, queue string) string {
+	return strings.Join([]string{version, queue}, "|")
+}
+
 func matchmakingMatchID(version, queue string, first, second MatchParticipant) string {
 	return fmt.Sprintf("%s|%s|%s|%s", version, queue, first.TicketID, second.TicketID)
 }
@@ -114,13 +120,14 @@ func (m *Match) responseFor(ticketID string) *matchmakingMatchResponse {
 }
 
 func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
+	h.ensureMatchmakingIndexesLocked()
 	for matchID, match := range h.Matches {
 		if !match.expired(now) {
 			continue
 		}
 
 		for _, player := range match.Players {
-			delete(h.Tickets, matchmakingTicketKey(match.Version, match.Queue, player.TicketID))
+			h.deleteTicketLocked(match.Version, match.Queue, player.TicketID)
 		}
 		delete(h.Matches, matchID)
 	}
@@ -134,12 +141,13 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 		}
 
 		if !ticket.waiting(now) {
-			delete(h.Tickets, key)
+			h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
 		}
 	}
 }
 
 func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, character string, now time.Time) (*matchmakingResponse, int) {
+	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if existing, ok := h.Tickets[key]; ok {
 		if existing.Character != character {
@@ -192,6 +200,10 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		}, http.StatusOK
 	}
 
+	if len(h.Tickets) >= maxMatchmakingTickets || len(h.Matches) >= maxMatchmakingMatches {
+		return nil, http.StatusServiceUnavailable
+	}
+
 	ticket := &MatchmakingTicket{
 		ID:        ticketID,
 		Version:   version,
@@ -206,6 +218,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	match, other := h.findCompatibleMatchLocked(ticket, now)
 	if match != nil {
 		h.Tickets[key] = ticket
+		h.addWaitingTicketLocked(ticket)
 		h.registerMatchLocked(match, ticket, other)
 		return &matchmakingResponse{
 			Status: "matched",
@@ -217,6 +230,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	}
 
 	h.Tickets[key] = ticket
+	h.addWaitingTicketLocked(ticket)
 	return &matchmakingResponse{
 		Status: "waiting",
 		Ticket: ticket.ID,
@@ -227,11 +241,8 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 
 func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now time.Time) (*Match, *MatchmakingTicket) {
 	var candidate *MatchmakingTicket
-	for _, other := range h.Tickets {
+	for _, other := range h.Waiting[matchmakingQueueKey(ticket.Version, ticket.Queue)] {
 		if other == ticket {
-			continue
-		}
-		if other.Version != ticket.Version || other.Queue != ticket.Queue {
 			continue
 		}
 		if other.MatchedID != "" || !other.waiting(now) {
@@ -294,10 +305,14 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	second.MatchedID = match.ID
 	first.CheckedIn = match.CreatedAt
 	second.CheckedIn = match.CreatedAt
+	h.removeWaitingTicketLocked(first)
+	h.removeWaitingTicketLocked(second)
 	h.Matches[match.ID] = match
+	h.Metrics.recordSuccessfulGame()
 }
 
 func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, now time.Time) (*matchmakingResponse, int) {
+	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	ticket, ok := h.Tickets[key]
 	if !ok {
@@ -314,12 +329,12 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, n
 				Match:  match.responseFor(ticket.ID),
 			}, http.StatusOK
 		}
-		delete(h.Tickets, key)
+		h.deleteTicketLocked(version, queue, ticketID)
 		return nil, http.StatusNotFound
 	}
 
 	if !ticket.waiting(now) {
-		delete(h.Tickets, key)
+		h.deleteTicketLocked(version, queue, ticketID)
 		return nil, http.StatusNotFound
 	}
 
@@ -332,6 +347,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, n
 }
 
 func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string) (*matchmakingResponse, int) {
+	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	ticket, ok := h.Tickets[key]
 	if !ok {
@@ -348,31 +364,68 @@ func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string) 
 	if ticket.MatchedID != "" {
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
 			for _, player := range match.Players {
-				delete(h.Tickets, matchmakingTicketKey(match.Version, match.Queue, player.TicketID))
+				h.deleteTicketLocked(match.Version, match.Queue, player.TicketID)
 			}
 			delete(h.Matches, ticket.MatchedID)
 			return resp, http.StatusOK
 		}
 	}
-	delete(h.Tickets, key)
+	h.deleteTicketLocked(version, queue, ticketID)
 	return resp, http.StatusOK
+}
+
+func (h *lobbyHandler) ensureMatchmakingIndexesLocked() {
+	if h.Waiting == nil {
+		h.Waiting = make(map[string]map[string]*MatchmakingTicket)
+	}
+}
+
+func (h *lobbyHandler) addWaitingTicketLocked(ticket *MatchmakingTicket) {
+	if ticket.MatchedID != "" {
+		return
+	}
+	queueKey := matchmakingQueueKey(ticket.Version, ticket.Queue)
+	if h.Waiting[queueKey] == nil {
+		h.Waiting[queueKey] = make(map[string]*MatchmakingTicket)
+	}
+	h.Waiting[queueKey][ticket.ID] = ticket
+}
+
+func (h *lobbyHandler) removeWaitingTicketLocked(ticket *MatchmakingTicket) {
+	queueKey := matchmakingQueueKey(ticket.Version, ticket.Queue)
+	waiting := h.Waiting[queueKey]
+	if waiting == nil {
+		return
+	}
+	delete(waiting, ticket.ID)
+	if len(waiting) == 0 {
+		delete(h.Waiting, queueKey)
+	}
+}
+
+func (h *lobbyHandler) deleteTicketLocked(version, queue, ticketID string) {
+	key := matchmakingTicketKey(version, queue, ticketID)
+	if ticket, ok := h.Tickets[key]; ok {
+		h.removeWaitingTicketLocked(ticket)
+	}
+	delete(h.Tickets, key)
 }
 
 func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, ip, version, queue, ticket string, port int) {
 	if !validateVersion(version) {
-		http.Error(w, "Invalid version", http.StatusBadRequest)
+		h.respondError(w, "Invalid version", http.StatusBadRequest)
 		return
 	}
 	if !validateMatchmakingQueue(queue) {
-		http.Error(w, "Invalid matchmaking queue", http.StatusBadRequest)
+		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
 		return
 	}
 	if !validateMatchmakingTicket(ticket) {
-		http.Error(w, "Invalid matchmaking ticket", http.StatusBadRequest)
+		h.respondError(w, "Invalid matchmaking ticket", http.StatusBadRequest)
 		return
 	}
 	if !validatePort(port) {
-		http.Error(w, "Invalid port", http.StatusBadRequest)
+		h.respondError(w, "Invalid port", http.StatusBadRequest)
 		return
 	}
 
@@ -381,11 +434,11 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&request); err != nil {
-			http.Error(w, "Invalid matchmaking request", http.StatusBadRequest)
+			h.respondError(w, "Invalid matchmaking request", http.StatusBadRequest)
 			return
 		}
 		if !validateMatchmakingCharacter(request.Character) {
-			http.Error(w, "Invalid matchmaking character", http.StatusBadRequest)
+			h.respondError(w, "Invalid matchmaking character", http.StatusBadRequest)
 			return
 		}
 	}
@@ -415,20 +468,24 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 	if resp == nil {
 		if status == http.StatusNotFound {
-			http.Error(w, "Matchmaking ticket not found", status)
+			h.respondError(w, "Matchmaking ticket not found", status)
+			return
+		}
+		if status == http.StatusServiceUnavailable {
+			h.respondError(w, "Server busy", status)
 			return
 		}
 		if status == http.StatusMethodNotAllowed {
-			http.Error(w, "Method not allowed", status)
+			h.respondError(w, "Method not allowed", status)
 			return
 		}
-		http.Error(w, "Internal error", http.StatusInternalServerError)
+		h.respondError(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
 	body, err := json.Marshal(resp)
 	if err != nil {
-		http.Error(w, "Internal error", http.StatusInternalServerError)
+		h.respondError(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 

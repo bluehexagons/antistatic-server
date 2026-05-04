@@ -10,6 +10,7 @@ Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 - Configurable HTTP timeouts
 - Automatic TLS with Let's Encrypt or custom certificates
 - Rate limiting to prevent abuse
+- Bounded in-memory lobby, matchmaking, and rate-limit state
 - Docker support
 - Health endpoint with lobby and matchmaking statistics
 
@@ -40,6 +41,22 @@ Specifying a port using -tlsport will implicitly enable TLS.
 | `-idle-timeout` | 60s | HTTP idle timeout |
 | `-trust-proxy` | false | Trust X-Forwarded-For and X-Real-IP headers |
 
+### Operational limits
+
+To keep memory and CPU bounded under abusive traffic, the server enforces fixed in-memory limits:
+
+| Limit | Value |
+|-------|-------|
+| URL path length | 512 bytes |
+| Request body size | 10 KiB |
+| Tracked rate-limit clients | 65,536 |
+| Active lobbies | 10,000 |
+| Members per lobby | 128 |
+| Matchmaking tickets | 20,000 |
+| Active matchmaking matches | 10,000 |
+
+When a capacity limit is reached, new state-creating requests return `503 Service Unavailable`; existing tickets and lobby members can continue to refresh until they expire or are deleted.
+
 ### Examples
 * `antistatic-server -tls -cert /etc/tls/server.crt -key /etc/tls/server.key` - Custom cert/key locations
 * `antistatic-server -tls -nohttp` - HTTPS only, no HTTP
@@ -58,7 +75,7 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health` | Health check (returns status, lobby count, ticket count, match count, version) |
+| `GET` | `/health` | Health check (returns status, live counts, startup lobby creation total, successful game estimate, error count, version) |
 | `PUT` | `/{version}/lobby/{key}/{port}` | Register/update a lobby member |
 | `DELETE` | `/{version}/lobby/{key}/{port}` | Remove a lobby member |
 | `GET` | `/lobby/{key}/{port}` | Legacy endpoint (no version) |
@@ -73,6 +90,9 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
   "lobby_count": 3,
   "ticket_count": 2,
   "match_count": 1,
+  "lobbies_created": 12,
+  "successful_games_estimate": 8,
+  "error_count": 1,
   "version": "1.0.0"
 }
 ```
