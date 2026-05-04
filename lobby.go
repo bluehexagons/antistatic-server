@@ -14,9 +14,9 @@ type Lobby struct {
 }
 
 type LobbySnapshot struct {
-	Key     string    `json:"key"`
-	Members []*Member `json:"members"`
-	Version string    `json:"version"`
+	Key     string       `json:"key"`
+	Members []MemberView `json:"members"`
+	Version string       `json:"version"`
 }
 
 const maxLobbyMembers = 128
@@ -24,16 +24,22 @@ const maxLobbyMembers = 128
 var errLobbyMemberTokenMismatch = errors.New("lobby member token mismatch")
 var errLobbyFull = errors.New("lobby full")
 
-func (l *Lobby) Snapshot() *LobbySnapshot {
+// SnapshotFor renders the lobby for a request originating from `requesterIP`.
+// Member.LocalIPs are only revealed to peers that share the member's public
+// IP, which keeps RFC 1918 / ULA addresses from leaking to unrelated WAN
+// strangers while still letting same-NAT peers tunnel via the LAN.
+func (l *Lobby) SnapshotFor(requesterIP string) *LobbySnapshot {
 	l.Mu.RLock()
 	defer l.Mu.RUnlock()
 
-	members := make([]*Member, len(l.Members))
-	copy(members, l.Members)
+	views := make([]MemberView, len(l.Members))
+	for i, m := range l.Members {
+		views[i] = m.View(requesterIP)
+	}
 
 	return &LobbySnapshot{
 		Key:     l.Key,
-		Members: members,
+		Members: views,
 		Version: l.Version,
 	}
 }
@@ -57,7 +63,7 @@ func (l *Lobby) Clean() {
 	l.Members = valid
 }
 
-func (l *Lobby) CheckIn(ip string, port int, token string) (string, error) {
+func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string) (string, error) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	for _, m := range l.Members {
@@ -66,6 +72,7 @@ func (l *Lobby) CheckIn(ip string, port int, token string) (string, error) {
 				return "", errLobbyMemberTokenMismatch
 			}
 			m.CheckedIn = time.Now()
+			m.LocalIPs = localIPs
 			return m.Token, nil
 		}
 	}
@@ -79,6 +86,7 @@ func (l *Lobby) CheckIn(ip string, port int, token string) (string, error) {
 	l.Members = append(l.Members, &Member{
 		IP:        ip,
 		Port:      port,
+		LocalIPs:  localIPs,
 		Token:     memberToken,
 		CheckedIn: time.Now(),
 	})

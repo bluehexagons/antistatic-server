@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -195,6 +196,16 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "key", key, "version", version)
 		token := r.Header.Get(antistaticTokenHeader)
 
+		var localIPs []string
+		if r.Method == "PUT" {
+			parsed, err := parseLobbyCheckInBody(r)
+			if err != nil {
+				h.respondError(w, "Invalid lobby request body", http.StatusBadRequest)
+				return
+			}
+			localIPs = parsed
+		}
+
 		h.Mu.Lock()
 		l, ok := h.Lobbies[key]
 		if !ok {
@@ -224,7 +235,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "PUT":
 			var err error
-			memberToken, err = l.CheckIn(ip, port, token)
+			memberToken, err = l.CheckIn(ip, port, token, localIPs)
 			if err == errLobbyMemberTokenMismatch {
 				h.Mu.Unlock()
 				h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
@@ -253,7 +264,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		snapshot := l.Snapshot()
+		snapshot := l.SnapshotFor(ip)
 		h.Mu.Unlock()
 
 		resp, err := json.Marshal(lobbyResponse{
@@ -302,3 +313,32 @@ var handler = &lobbyHandler{
 }
 
 const tickInterval = 5 * time.Minute
+
+// lobbyCheckInBody is the optional JSON payload accepted on lobby PUT requests.
+// All fields are optional so older clients (and the matchmaking flow that
+// reuses this endpoint shape) keep working with no body at all.
+type lobbyCheckInBody struct {
+	LocalIPs []string `json:"local_ips,omitempty"`
+}
+
+// parseLobbyCheckInBody pulls the optional JSON body off a lobby PUT request,
+// returning the sanitized list of LAN candidate addresses (RFC 1918 / link-
+// local / loopback). Empty body is valid and yields a nil slice.
+func parseLobbyCheckInBody(r *http.Request) ([]string, error) {
+	if r.Body == nil {
+		return nil, nil
+	}
+	if r.ContentLength == 0 {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var body lobbyCheckInBody
+	if err := decoder.Decode(&body); err != nil {
+		if err == io.EOF {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return sanitizeLocalIPs(body.LocalIPs), nil
+}
