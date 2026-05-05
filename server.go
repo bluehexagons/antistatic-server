@@ -15,10 +15,22 @@ import (
 const maxPathLength = 512
 const maxLobbies = 10000
 
+const recentErrorCap = 20
+
+type recentError struct {
+	Time    time.Time `json:"time"`
+	Message string    `json:"message"`
+	Status  int       `json:"status"`
+}
+
 type serverMetrics struct {
 	lobbiesCreated  atomic.Int64
 	successfulGames atomic.Int64
-	errors          atomic.Int64
+	clientErrors    atomic.Int64
+	serverErrors    atomic.Int64
+
+	recentMu    sync.Mutex
+	recentErrors []recentError
 }
 
 func (m *serverMetrics) recordLobbyCreated() {
@@ -29,8 +41,29 @@ func (m *serverMetrics) recordSuccessfulGame() {
 	m.successfulGames.Add(1)
 }
 
-func (m *serverMetrics) recordError() {
-	m.errors.Add(1)
+func (m *serverMetrics) recordError(msg string, status int) {
+	if status >= 500 {
+		m.serverErrors.Add(1)
+	} else {
+		m.clientErrors.Add(1)
+	}
+	m.recentMu.Lock()
+	m.recentErrors = append(m.recentErrors, recentError{Time: time.Now(), Message: msg, Status: status})
+	if len(m.recentErrors) > recentErrorCap {
+		m.recentErrors = m.recentErrors[len(m.recentErrors)-recentErrorCap:]
+	}
+	m.recentMu.Unlock()
+}
+
+func (m *serverMetrics) snapshotRecentErrors() []recentError {
+	m.recentMu.Lock()
+	defer m.recentMu.Unlock()
+	if len(m.recentErrors) == 0 {
+		return nil
+	}
+	out := make([]recentError, len(m.recentErrors))
+	copy(out, m.recentErrors)
+	return out
 }
 
 type lobbyHandler struct {
@@ -48,14 +81,16 @@ type lobbyHandler struct {
 }
 
 type healthResponse struct {
-	Status                  string `json:"status"`
-	LobbyCount              int    `json:"lobby_count"`
-	TicketCount             int    `json:"ticket_count"`
-	MatchCount              int    `json:"match_count"`
-	LobbiesCreated          int64  `json:"lobbies_created"`
-	SuccessfulGamesEstimate int64  `json:"successful_games_estimate"`
-	ErrorCount              int64  `json:"error_count"`
-	Version                 string `json:"version"`
+	Status                  string       `json:"status"`
+	LobbyCount              int          `json:"lobby_count"`
+	TicketCount             int          `json:"ticket_count"`
+	MatchCount              int          `json:"match_count"`
+	LobbiesCreated          int64        `json:"lobbies_created"`
+	SuccessfulGamesEstimate int64        `json:"successful_games_estimate"`
+	ClientErrorCount        int64        `json:"client_error_count"`
+	ServerErrorCount        int64        `json:"server_error_count"`
+	RecentErrors            []recentError `json:"recent_errors,omitempty"`
+	Version                 string       `json:"version"`
 }
 
 func (h *lobbyHandler) healthResponse() healthResponse {
@@ -67,15 +102,17 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		MatchCount:              len(h.Matches),
 		LobbiesCreated:          h.Metrics.lobbiesCreated.Load(),
 		SuccessfulGamesEstimate: h.Metrics.successfulGames.Load(),
-		ErrorCount:              h.Metrics.errors.Load(),
-		Version:                 "0.6.3",
+		ClientErrorCount:        h.Metrics.clientErrors.Load(),
+		ServerErrorCount:        h.Metrics.serverErrors.Load(),
+		RecentErrors:            h.Metrics.snapshotRecentErrors(),
+		Version:                 "0.6.4",
 	}
 	h.Mu.RUnlock()
 	return resp
 }
 
 func (h *lobbyHandler) respondError(w http.ResponseWriter, msg string, status int) {
-	h.Metrics.recordError()
+	h.Metrics.recordError(msg, status)
 	http.Error(w, msg, status)
 }
 
@@ -284,7 +321,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, err = w.Write(resp)
 		if err != nil {
 			slog.Error("Write error", "requestID", getRequestID(r), "error", err)
-			h.Metrics.recordError()
+			h.Metrics.recordError("Write error", http.StatusInternalServerError)
 		}
 		return
 	}

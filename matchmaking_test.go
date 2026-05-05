@@ -384,7 +384,7 @@ func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid character status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got := h.Metrics.errors.Load(); got == 0 {
-		t.Fatalf("error counter = %d, want > 0", got)
+	if got := h.Metrics.clientErrors.Load(); got == 0 {
+		t.Fatalf("client error counter = %d, want > 0", got)
 	}
 }
