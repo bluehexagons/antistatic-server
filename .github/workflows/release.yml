@@ -47,6 +47,7 @@ jobs:
         with:
           name: ${{ matrix.output }}
           path: ${{ matrix.output }}
+          retention-days: 7
 
   release:
     name: Create release
