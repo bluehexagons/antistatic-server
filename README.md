@@ -41,6 +41,8 @@ Specifying a port using -tlsport will implicitly enable TLS.
 | `-idle-timeout` | 60s | HTTP idle timeout |
 | `-trust-proxy` | false | Trust X-Forwarded-For and X-Real-IP headers |
 | `-trusted-proxy-cidrs` | "" | Comma-separated CIDR allowlist for trusted reverse proxies |
+| `-stun-host` | "" | Bind address for the built-in STUN responder (default: dual-stack any-address) |
+| `-stun-port` | 0 | UDP port for the built-in STUN responder (0 disables; conventional value is 3478) |
 
 ### Operational limits
 
@@ -66,6 +68,21 @@ When a capacity limit is reached, new state-creating requests return `503 Servic
 * `antistatic-server -autocert example.com -autocert-cache /var/cache/certs` - Custom cache directory
 * `antistatic-server -read-timeout 30s -write-timeout 30s` - Custom timeouts
 * `antistatic-server -trust-proxy -trusted-proxy-cidrs 127.0.0.1/32` - Trust proxy headers from a local reverse proxy
+
+### Built-in STUN responder
+
+The server can answer RFC 5389 Binding Requests on a UDP port so the
+matchmaking client can discover its externally-mapped UDP endpoint without
+relying on a third-party STUN service. Enable it with `-stun-port 3478` (and
+optionally `-stun-host` to bind a specific address). The UDP port must be
+reachable directly from the public internet; UDP traffic is not forwarded by
+HTTP reverse proxies, so route 3478/udp through the host firewall to the
+server process.
+
+The responder only emits Binding Success replies with a single
+XOR-MAPPED-ADDRESS attribute — no auth, no relay, no TURN — and discards
+anything that isn't a well-formed Binding Request, so it has the same minimal
+attack surface as the existing HTTP listener.
 
 ### Reverse proxy setup
 

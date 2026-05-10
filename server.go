@@ -105,7 +105,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		ClientErrorCount:        h.Metrics.clientErrors.Load(),
 		ServerErrorCount:        h.Metrics.serverErrors.Load(),
 		RecentErrors:            h.Metrics.snapshotRecentErrors(),
-		Version:                 "0.6.4",
+		Version:                 "0.7.0",
 	}
 	h.Mu.RUnlock()
 	return resp

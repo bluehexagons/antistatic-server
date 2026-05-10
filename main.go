@@ -35,6 +35,8 @@ var writeTimeout = 15 * time.Second
 var idleTimeout = 60 * time.Second
 var trustProxy = false
 var trustedProxyCIDRs = ""
+var stunHost = ""
+var stunPort = 0
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	resp, _ := json.Marshal(handler.healthResponse())
@@ -64,6 +66,8 @@ func main() {
 	flag.DurationVar(&idleTimeout, "idle-timeout", idleTimeout, "HTTP idle timeout")
 	flag.BoolVar(&trustProxy, "trust-proxy", trustProxy, "Trust X-Forwarded-For and X-Real-IP headers")
 	flag.StringVar(&trustedProxyCIDRs, "trusted-proxy-cidrs", trustedProxyCIDRs, "Comma-separated CIDR allowlist for trusted reverse proxies")
+	flag.StringVar(&stunHost, "stun-host", stunHost, "Host to bind the built-in STUN responder (default: dual-stack any-address)")
+	flag.IntVar(&stunPort, "stun-port", stunPort, "UDP port for the built-in STUN responder (0 disables; conventional value is 3478)")
 	flag.Parse()
 
 	if err := setTrustedProxyCIDRs(trustedProxyCIDRs); err != nil {
@@ -190,6 +194,17 @@ func main() {
 
 	handler.Maintain()
 
+	var stun *stunServer
+	if stunPort > 0 && stunPort <= 65535 {
+		s, err := startStunServer(stunHost, stunPort)
+		if err != nil {
+			slog.Error("Failed to start STUN responder", "error", err, "host", stunHost, "port", stunPort)
+		} else {
+			stun = s
+			slog.Info("STUN responder listening", "addr", stun.localAddr().String())
+		}
+	}
+
 	<-ctx.Done()
 	slog.Info("Shutdown signal received, starting graceful shutdown...")
 
@@ -207,6 +222,10 @@ func main() {
 		}(srv)
 	}
 	shutdownWg.Wait()
+
+	if stun != nil {
+		stun.Close(shutdownCtx)
+	}
 
 	handler.Stop()
 	wg.Wait()

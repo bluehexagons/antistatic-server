@@ -17,5 +17,6 @@ WORKDIR /app
 COPY --from=builder /app/antistatic-server .
 
 EXPOSE 80 443
+EXPOSE 3478/udp
 
 CMD ["./antistatic-server"]

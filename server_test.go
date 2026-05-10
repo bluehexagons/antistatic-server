@@ -245,8 +245,8 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	if resp.LobbyCount != 1 || resp.MatchCount != 1 || resp.LobbiesCreated != 1 || resp.SuccessfulGamesEstimate != 1 || resp.ClientErrorCount != 1 {
 		t.Fatalf("health payload = %#v, want counters", resp)
 	}
-	if resp.Version != "0.6.4" {
-		t.Fatalf("health version = %q, want 0.6.4", resp.Version)
+	if resp.Version != "0.7.0" {
+		t.Fatalf("health version = %q, want 0.7.0", resp.Version)
 	}
 }
 
