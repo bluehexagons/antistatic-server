@@ -59,7 +59,7 @@ func TestSanitizeLocalIPsCapsAtLimit(t *testing.T) {
 }
 
 func TestMemberViewExposesLocalIPsOnlyToSamePublicIP(t *testing.T) {
-	m := &Member{IP: "203.0.113.5", Port: 4444, LocalIPs: []string{"192.168.1.5"}}
+	m := &Member{Endpoints: []Endpoint{{IP: "203.0.113.5", Port: 4444}}, LocalIPs: []string{"192.168.1.5"}}
 
 	sameNAT := m.View("203.0.113.5")
 	if !reflect.DeepEqual(sameNAT.LocalIPs, []string{"192.168.1.5"}) {

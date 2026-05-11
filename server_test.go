@@ -95,8 +95,8 @@ func TestVersionedLobbyCheckInIgnoresQueryString(t *testing.T) {
 
 	response := decodeLobbyResponse(t, rec)
 
-	if response.IP != "198.51.100.10" || response.Port != 45860 {
-		t.Fatalf("response endpoint = %s:%d, want 198.51.100.10:45860", response.IP, response.Port)
+	if response.Endpoint.IP != "198.51.100.10" || response.Endpoint.Port != 45860 {
+		t.Fatalf("response endpoint = %s:%d, want 198.51.100.10:45860", response.Endpoint.IP, response.Endpoint.Port)
 	}
 	if response.Token == "" {
 		t.Fatalf("response token was empty")
@@ -104,7 +104,7 @@ func TestVersionedLobbyCheckInIgnoresQueryString(t *testing.T) {
 	if response.Lobby == nil || response.Lobby.Version != "0.9.5" {
 		t.Fatalf("response lobby version = %#v, want 0.9.5", response.Lobby)
 	}
-	if len(response.Lobby.Members) != 1 || response.Lobby.Members[0].IP != "198.51.100.10" {
+	if len(response.Lobby.Members) != 1 || len(response.Lobby.Members[0].Endpoints) != 1 || response.Lobby.Members[0].Endpoints[0].IP != "198.51.100.10" {
 		t.Fatalf("response members = %#v, want one checked-in member", response.Lobby.Members)
 	}
 	// MemberView intentionally lacks a Token field; the leak this test used
@@ -124,7 +124,7 @@ func TestLegacyLobbyRoute(t *testing.T) {
 	if response.Lobby == nil || response.Lobby.Version != "" {
 		t.Fatalf("legacy lobby version = %#v, want empty version", response.Lobby)
 	}
-	if len(response.Lobby.Members) != 1 || response.Lobby.Members[0].Port != 45860 {
+	if len(response.Lobby.Members) != 1 || len(response.Lobby.Members[0].Endpoints) != 1 || response.Lobby.Members[0].Endpoints[0].Port != 45860 {
 		t.Fatalf("legacy response members = %#v, want one checked-in member", response.Lobby.Members)
 	}
 }
@@ -165,6 +165,79 @@ func TestLobbyRejectsOverlongPath(t *testing.T) {
 	}
 }
 
+// TestLobbyMergesDualFamilyCheckIns covers the two-family enrollment flow:
+// the same client posts once over IPv4 and once over IPv6 with the same
+// lobby key + token. The server must merge them into a single member with
+// two endpoints rather than treating them as two separate members.
+func TestLobbyMergesDualFamilyCheckIns(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("v4 PUT status = %d", rec.Code)
+	}
+	token := decodeLobbyResponse(t, rec).Token
+	if token == "" {
+		t.Fatalf("missing token from first PUT")
+	}
+
+	rec = serveLobbyRequestWithToken(h, http.MethodPut, "/0.9.5/lobby/ABC123/45861", "[2001:db8::1]:32001", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("v6 PUT status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	resp := decodeLobbyResponse(t, rec)
+	if len(resp.Lobby.Members) != 1 {
+		t.Fatalf("members = %d, want 1 merged member", len(resp.Lobby.Members))
+	}
+	endpoints := resp.Lobby.Members[0].Endpoints
+	if len(endpoints) != 2 {
+		t.Fatalf("endpoints = %#v, want both v4 + v6 endpoints", endpoints)
+	}
+	gotV4 := false
+	gotV6 := false
+	for _, e := range endpoints {
+		if e.IP == "198.51.100.10" && e.Port == 45860 {
+			gotV4 = true
+		}
+		if e.IP == "2001:db8::1" && e.Port == 45861 {
+			gotV6 = true
+		}
+	}
+	if !gotV4 || !gotV6 {
+		t.Fatalf("endpoints = %#v, want v4 (198.51.100.10:45860) and v6 (2001:db8::1:45861)", endpoints)
+	}
+}
+
+// TestLobbyReplacesEndpointInSameFamilyOnRefresh checks that a port-mapping
+// shift on one family (common with carrier-grade NATs) updates that family's
+// endpoint without disturbing the other family's recorded endpoint.
+func TestLobbyReplacesEndpointInSameFamilyOnRefresh(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
+	token := decodeLobbyResponse(t, rec).Token
+	_ = serveLobbyRequestWithToken(h, http.MethodPut, "/0.9.5/lobby/ABC123/45861", "[2001:db8::1]:32001", token)
+
+	// v4 port shifts; v6 stays.
+	rec = serveLobbyRequestWithToken(h, http.MethodPut, "/0.9.5/lobby/ABC123/45870", "198.51.100.10:32000", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("v4 re-PUT status = %d", rec.Code)
+	}
+	resp := decodeLobbyResponse(t, rec)
+	if len(resp.Lobby.Members) != 1 || len(resp.Lobby.Members[0].Endpoints) != 2 {
+		t.Fatalf("endpoints after v4 port shift = %#v, want still two", resp.Lobby.Members[0].Endpoints)
+	}
+	for _, e := range resp.Lobby.Members[0].Endpoints {
+		if ipFamily(e.IP) == 4 && e.Port != 45870 {
+			t.Fatalf("v4 endpoint did not update after port shift: %#v", resp.Lobby.Members[0].Endpoints)
+		}
+		if ipFamily(e.IP) == 6 && e.Port != 45861 {
+			t.Fatalf("v6 endpoint changed when only v4 should have: %#v", resp.Lobby.Members[0].Endpoints)
+		}
+	}
+}
+
 func TestLobbyAcceptsIPv6RemoteAddress(t *testing.T) {
 	h := newTestLobbyHandler()
 	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "[2001:db8::1]:32000")
@@ -174,8 +247,8 @@ func TestLobbyAcceptsIPv6RemoteAddress(t *testing.T) {
 	}
 
 	response := decodeLobbyResponse(t, rec)
-	if response.IP != "2001:db8::1" || response.Port != 45860 {
-		t.Fatalf("response endpoint = %s:%d, want 2001:db8::1:45860", response.IP, response.Port)
+	if response.Endpoint.IP != "2001:db8::1" || response.Endpoint.Port != 45860 {
+		t.Fatalf("response endpoint = %s:%d, want 2001:db8::1:45860", response.Endpoint.IP, response.Endpoint.Port)
 	}
 }
 
@@ -245,8 +318,8 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	if resp.LobbyCount != 1 || resp.MatchCount != 1 || resp.LobbiesCreated != 1 || resp.SuccessfulGamesEstimate != 1 || resp.ClientErrorCount != 1 {
 		t.Fatalf("health payload = %#v, want counters", resp)
 	}
-	if resp.Version != "0.7.0" {
-		t.Fatalf("health version = %q, want 0.7.0", resp.Version)
+	if resp.Version != "0.8.0" {
+		t.Fatalf("health version = %q, want 0.8.0", resp.Version)
 	}
 }
 
@@ -272,7 +345,8 @@ func TestLobbyLocalIPsRevealedOnlyToSamePublicIP(t *testing.T) {
 	resp := decodeLobbyResponse(t, rec)
 	var firstMember *MemberView
 	for i := range resp.Lobby.Members {
-		if resp.Lobby.Members[i].Port == 45860 {
+		eps := resp.Lobby.Members[i].Endpoints
+		if len(eps) > 0 && eps[0].Port == 45860 {
 			firstMember = &resp.Lobby.Members[i]
 		}
 	}
@@ -290,7 +364,7 @@ func TestLobbyLocalIPsRevealedOnlyToSamePublicIP(t *testing.T) {
 	}
 	resp = decodeLobbyResponse(t, rec)
 	for _, m := range resp.Lobby.Members {
-		if m.IP == "203.0.113.5" && m.LocalIPs != nil {
+		if len(m.Endpoints) > 0 && m.Endpoints[0].IP == "203.0.113.5" && m.LocalIPs != nil {
 			t.Fatalf("stranger received local_ips %v from a peer behind a different NAT", m.LocalIPs)
 		}
 	}
@@ -320,7 +394,7 @@ func TestLobbyDropsPublicLocalIPs(t *testing.T) {
 	rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45861", "203.0.113.5:32001", "", "")
 	resp := decodeLobbyResponse(t, rec)
 	for _, m := range resp.Lobby.Members {
-		if m.Port != 45860 {
+		if len(m.Endpoints) == 0 || m.Endpoints[0].Port != 45860 {
 			continue
 		}
 		for _, ip := range m.LocalIPs {

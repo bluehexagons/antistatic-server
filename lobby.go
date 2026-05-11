@@ -63,17 +63,32 @@ func (l *Lobby) Clean() {
 	l.Members = valid
 }
 
+// CheckIn registers (or refreshes) a member endpoint. The two-family flow
+// works by the client posting once over IPv4 and once over IPv6 with the
+// same lobby key + token: the first PUT (token == "") creates the member
+// and returns its bearer token; the second PUT (token from the first
+// response) merges its source IP into the same member as an additional
+// endpoint. Subsequent refresh PUTs re-merge by family — a port mapping
+// shift on one family just updates that family's endpoint without
+// disturbing the other.
 func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string) (string, error) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
-	for _, m := range l.Members {
-		if m.IP == ip && m.Port == port {
-			if token == "" || token != m.Token {
-				return "", errLobbyMemberTokenMismatch
+	if token != "" {
+		for _, m := range l.Members {
+			if m.Token != token {
+				continue
 			}
+			m.MergeEndpoint(ip, port)
 			m.CheckedIn = time.Now()
 			m.LocalIPs = localIPs
 			return m.Token, nil
+		}
+		return "", errLobbyMemberTokenMismatch
+	}
+	for _, m := range l.Members {
+		if m.MatchesEndpoint(ip, port) {
+			return "", errLobbyMemberTokenMismatch
 		}
 	}
 	if len(l.Members) >= maxLobbyMembers {
@@ -84,8 +99,7 @@ func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string) (s
 		return "", err
 	}
 	l.Members = append(l.Members, &Member{
-		IP:        ip,
-		Port:      port,
+		Endpoints: []Endpoint{{IP: ip, Port: port}},
 		LocalIPs:  localIPs,
 		Token:     memberToken,
 		CheckedIn: time.Now(),
@@ -97,18 +111,19 @@ func (l *Lobby) CheckOut(ip string, port int, token string) error {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	for k, m := range l.Members {
-		if m.IP == ip && m.Port == port {
-			if token == "" || token != m.Token {
-				return errLobbyMemberTokenMismatch
-			}
-			if len(l.Members) > 1 {
-				l.Members[k] = l.Members[len(l.Members)-1]
-				l.Members = l.Members[:len(l.Members)-1]
-			} else {
-				l.Members = nil
-			}
-			return nil
+		if !m.MatchesEndpoint(ip, port) {
+			continue
 		}
+		if token == "" || token != m.Token {
+			return errLobbyMemberTokenMismatch
+		}
+		if len(l.Members) > 1 {
+			l.Members[k] = l.Members[len(l.Members)-1]
+			l.Members = l.Members[:len(l.Members)-1]
+		} else {
+			l.Members = nil
+		}
+		return nil
 	}
 	return nil
 }

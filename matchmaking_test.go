@@ -61,7 +61,7 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	if response.Status != "waiting" {
 		t.Fatalf("status = %q, want waiting", response.Status)
 	}
-	if response.Ticket != "TicketA" || response.IP != "198.51.100.10" || response.Port != 45860 {
+	if response.Ticket != "TicketA" || len(response.Endpoints) != 1 || response.Endpoints[0].IP != "198.51.100.10" || response.Endpoints[0].Port != 45860 {
 		t.Fatalf("response = %#v, want ticket/IP/port preserved", response)
 	}
 	if response.Token == "" {
@@ -123,13 +123,13 @@ func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 
 	h.Mu.RLock()
 	updated := h.Tickets[key].CheckedIn
-	updatedPort := h.Tickets[key].Port
+	updatedEndpoints := append([]Endpoint(nil), h.Tickets[key].Endpoints...)
 	h.Mu.RUnlock()
 	if !updated.After(before) {
 		t.Fatalf("checked-in time was not refreshed: before=%v after=%v", before, updated)
 	}
-	if updatedPort != 45860 {
-		t.Fatalf("ticket port = %d, want %d", updatedPort, 45860)
+	if len(updatedEndpoints) != 1 || updatedEndpoints[0].Port != 45860 {
+		t.Fatalf("ticket endpoints = %#v, want one entry on port 45860", updatedEndpoints)
 	}
 }
 
@@ -153,8 +153,8 @@ func TestMatchmakingRefreshUpdatesEndpoint(t *testing.T) {
 	h.Mu.RLock()
 	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
 	h.Mu.RUnlock()
-	if ticket.IP != "198.51.100.11" || ticket.Port != 45861 {
-		t.Fatalf("ticket endpoint = %s:%d, want 198.51.100.11:45861", ticket.IP, ticket.Port)
+	if len(ticket.Endpoints) != 1 || ticket.Endpoints[0].IP != "198.51.100.11" || ticket.Endpoints[0].Port != 45861 {
+		t.Fatalf("ticket endpoints = %#v, want single replacement 198.51.100.11:45861", ticket.Endpoints)
 	}
 }
 
@@ -177,8 +177,8 @@ func TestMatchmakingRefreshRejectsWrongToken(t *testing.T) {
 	h.Mu.RLock()
 	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
 	h.Mu.RUnlock()
-	if ticket.IP != "198.51.100.10" || ticket.Port != 45860 {
-		t.Fatalf("ticket endpoint changed to %s:%d after wrong-token refresh", ticket.IP, ticket.Port)
+	if len(ticket.Endpoints) != 1 || ticket.Endpoints[0].IP != "198.51.100.10" || ticket.Endpoints[0].Port != 45860 {
+		t.Fatalf("ticket endpoints = %#v after wrong-token refresh, want unchanged 198.51.100.10:45860", ticket.Endpoints)
 	}
 }
 

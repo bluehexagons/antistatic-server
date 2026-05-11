@@ -79,6 +79,52 @@ func TestStunBindingResponse(t *testing.T) {
 	}
 }
 
+// TestStunBindingResponseIPv6 exercises the v6 side of the dual-stack
+// responder: bind on the IPv6 loopback, send a v6 binding request, and
+// verify the XOR-MAPPED-ADDRESS reflects an IPv6 family back. Catches any
+// future regressions around v4-only port collection logic.
+func TestStunBindingResponseIPv6(t *testing.T) {
+	srv, err := startStunServer("::1", 0)
+	if err != nil {
+		t.Fatalf("startStunServer v6: %v", err)
+	}
+	defer srv.Close(context.Background())
+
+	target := srv.localAddr().(*net.UDPAddr)
+	conn, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Fatalf("client listen v6: %v", err)
+	}
+	defer conn.Close()
+
+	txn := make([]byte, stunTransactionIDLength)
+	for i := range txn {
+		txn[i] = byte(i*11 + 3)
+	}
+	req := make([]byte, stunHeaderLength)
+	binary.BigEndian.PutUint16(req[0:2], stunBindingRequestType)
+	binary.BigEndian.PutUint16(req[2:4], 0)
+	binary.BigEndian.PutUint32(req[4:8], stunMagicCookie)
+	copy(req[8:], txn)
+	if _, err := conn.WriteToUDP(req, target); err != nil {
+		t.Fatalf("client write v6: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, stunMaxPacketLength)
+	n, _, err := conn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("client read v6: %v", err)
+	}
+	resp := buf[:n]
+	if got := binary.BigEndian.Uint16(resp[0:2]); got != stunBindingSuccessType {
+		t.Fatalf("type = %#x, want %#x", got, stunBindingSuccessType)
+	}
+	body := resp[stunHeaderLength+4:]
+	if body[1] != stunIPv6Family {
+		t.Fatalf("family = %#x, want IPv6", body[1])
+	}
+}
+
 func TestStunIgnoresNonBindingPackets(t *testing.T) {
 	srv, err := startStunServer("127.0.0.1", 0)
 	if err != nil {

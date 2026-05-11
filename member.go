@@ -5,22 +5,36 @@ import (
 	"time"
 )
 
-type Member struct {
-	IP        string    `json:"ip"`
-	Port      int       `json:"port"`
-	LocalIPs  []string  `json:"local_ips,omitempty"`
-	Token     string    `json:"-"`
-	CheckedIn time.Time `json:"-"`
+// Endpoint is a single (IP, Port) pair observed for a member or matchmaking
+// ticket. Each public family (v4 / v6) gets its own entry so peers can pick
+// whichever family they can route on. The IP is whatever the server saw the
+// PUT come from (X-Forwarded-For via the trusted proxy header, or the raw
+// remote address otherwise); the port is the externally observed UDP port
+// supplied by the client after running STUN over that family.
+type Endpoint struct {
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
 }
 
-// MemberView is the per-request projection of a Member. LocalIPs are only
-// included for peers behind the same public IP as the requesting client; this
-// keeps RFC 1918 / ULA addresses from leaking to unrelated WAN strangers in the
-// lobby while still letting same-NAT peers discover each other for tunneling.
+type Member struct {
+	// Endpoints lists every (IP, Port) the member has checked in from. The
+	// first entry is the original / primary endpoint (kept stable so that
+	// older clients reading the flat top-level IP/Port fields keep seeing
+	// the same value across refresh cycles). Additional entries are added
+	// when the member checks in over a second address family.
+	Endpoints []Endpoint
+	LocalIPs  []string
+	Token     string
+	CheckedIn time.Time
+}
+
+// MemberView is the per-request projection of a Member. Endpoints lists
+// every family the member is reachable on (always at least one entry).
+// LocalIPs are only included for peers behind the same public IP as the
+// requesting client.
 type MemberView struct {
-	IP       string   `json:"ip"`
-	Port     int      `json:"port"`
-	LocalIPs []string `json:"local_ips,omitempty"`
+	Endpoints []Endpoint `json:"endpoints"`
+	LocalIPs  []string   `json:"local_ips,omitempty"`
 }
 
 const memberTimeout = 30 * time.Second
@@ -34,19 +48,85 @@ const maxLocalIPsPerMember = 8
 // with a zone identifier comfortably fits under this bound.
 const maxLocalIPLength = 64
 
+// maxEndpointsPerMember caps the per-family endpoint list. Two is sufficient
+// (one IPv4 + one IPv6) but we leave a little headroom for clients that
+// might publish multiple v6 sources (e.g. distinct prefixes) before the
+// design needs to change.
+const maxEndpointsPerMember = 4
+
 func (m *Member) Stale() bool {
 	now := time.Now()
 	return now.After(m.CheckedIn.Add(memberTimeout))
 }
 
-// View renders this member for a request from `requesterIP`. LAN addresses are
-// only exposed to peers sharing this member's public IP.
+// PrimaryEndpoint returns the first checked-in endpoint, or a zero value if
+// the member has no endpoints (defensive — should not happen in practice).
+func (m *Member) PrimaryEndpoint() Endpoint {
+	if len(m.Endpoints) == 0 {
+		return Endpoint{}
+	}
+	return m.Endpoints[0]
+}
+
+// MatchesEndpoint reports whether the member already lists exactly this
+// (ip, port). Used by lobby check-in to detect duplicate keepalives.
+func (m *Member) MatchesEndpoint(ip string, port int) bool {
+	for _, e := range m.Endpoints {
+		if e.IP == ip && e.Port == port {
+			return true
+		}
+	}
+	return false
+}
+
+// MergeEndpoint records a new (ip, port) for the member. If the member
+// already has an endpoint in the same address family, that entry is
+// replaced (port mapping shifts are common on consumer NATs). Otherwise
+// the endpoint is appended, up to maxEndpointsPerMember.
+func (m *Member) MergeEndpoint(ip string, port int) {
+	family := ipFamily(ip)
+	for i := range m.Endpoints {
+		if ipFamily(m.Endpoints[i].IP) == family {
+			m.Endpoints[i] = Endpoint{IP: ip, Port: port}
+			return
+		}
+	}
+	if len(m.Endpoints) >= maxEndpointsPerMember {
+		return
+	}
+	m.Endpoints = append(m.Endpoints, Endpoint{IP: ip, Port: port})
+}
+
+// View renders this member for a request from `requesterIP`. LAN addresses
+// are only exposed to peers sharing any of this member's public IPs.
 func (m *Member) View(requesterIP string) MemberView {
-	v := MemberView{IP: m.IP, Port: m.Port}
-	if requesterIP != "" && m.IP == requesterIP && len(m.LocalIPs) > 0 {
-		v.LocalIPs = append(v.LocalIPs, m.LocalIPs...)
+	v := MemberView{}
+	if len(m.Endpoints) > 0 {
+		v.Endpoints = append(v.Endpoints, m.Endpoints...)
+	}
+	if requesterIP != "" && len(m.LocalIPs) > 0 {
+		for _, e := range m.Endpoints {
+			if e.IP == requesterIP {
+				v.LocalIPs = append(v.LocalIPs, m.LocalIPs...)
+				break
+			}
+		}
 	}
 	return v
+}
+
+// ipFamily returns 4 for IPv4 textual addresses, 6 for IPv6, and 0 for
+// unparseable inputs. IPv4-mapped IPv6 ("::ffff:1.2.3.4") is reported as
+// IPv4 since the server canonicalizes those before storage.
+func ipFamily(ip string) int {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return 0
+	}
+	if parsed.To4() != nil {
+		return 4
+	}
+	return 6
 }
 
 // sanitizeLocalIPs filters a caller-supplied list down to syntactically valid,

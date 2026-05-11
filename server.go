@@ -105,7 +105,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		ClientErrorCount:        h.Metrics.clientErrors.Load(),
 		ServerErrorCount:        h.Metrics.serverErrors.Load(),
 		RecentErrors:            h.Metrics.snapshotRecentErrors(),
-		Version:                 "0.7.0",
+		Version:                 "0.8.0",
 	}
 	h.Mu.RUnlock()
 	return resp
@@ -154,10 +154,9 @@ func (h *lobbyHandler) Stop() {
 }
 
 type lobbyResponse struct {
-	Lobby *LobbySnapshot `json:"lobby"`
-	IP    string         `json:"ip"`
-	Port  int            `json:"port"`
-	Token string         `json:"token,omitempty"`
+	Lobby    *LobbySnapshot `json:"lobby"`
+	Endpoint Endpoint       `json:"endpoint"`
+	Token    string         `json:"token,omitempty"`
 }
 
 func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -306,10 +305,9 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Mu.Unlock()
 
 		resp, err := json.Marshal(lobbyResponse{
-			Lobby: snapshot,
-			IP:    ip,
-			Port:  port,
-			Token: memberToken,
+			Lobby:    snapshot,
+			Endpoint: Endpoint{IP: ip, Port: port},
+			Token:    memberToken,
 		})
 		if err != nil {
 			h.respondError(w, "Internal error", http.StatusInternalServerError)

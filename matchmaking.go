@@ -15,23 +15,63 @@ const maxMatchmakingMatches = 10000
 const maxMatchmakingQueues = 10000
 
 type MatchmakingTicket struct {
-	ID        string    `json:"id"`
-	Version   string    `json:"version"`
-	Queue     string    `json:"queue"`
-	IP        string    `json:"ip"`
-	Port      int       `json:"port"`
-	Token     string    `json:"-"`
-	Character string    `json:"character"`
-	LocalIPs  []string  `json:"local_ips,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	CheckedIn time.Time `json:"checked_in"`
-	MatchedID string    `json:"matched_id"`
+	ID        string     `json:"id"`
+	Version   string     `json:"version"`
+	Queue     string     `json:"queue"`
+	Endpoints []Endpoint `json:"endpoints"`
+	Token     string     `json:"-"`
+	Character string     `json:"character"`
+	LocalIPs  []string   `json:"local_ips,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	CheckedIn time.Time  `json:"checked_in"`
+	MatchedID string     `json:"matched_id"`
+}
+
+// matchesAnyEndpoint reports whether the ticket already lists this
+// (ip, port) — used by lobby-style checks where a duplicate keepalive
+// without a token would otherwise create a second member.
+func (t *MatchmakingTicket) matchesAnyEndpoint(ip string, port int) bool {
+	for _, e := range t.Endpoints {
+		if e.IP == ip && e.Port == port {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeEndpoint adds (or replaces in-family) a checked-in endpoint, capped
+// at maxEndpointsPerMember.
+func (t *MatchmakingTicket) mergeEndpoint(ip string, port int) {
+	family := ipFamily(ip)
+	for i := range t.Endpoints {
+		if ipFamily(t.Endpoints[i].IP) == family {
+			t.Endpoints[i] = Endpoint{IP: ip, Port: port}
+			return
+		}
+	}
+	if len(t.Endpoints) >= maxEndpointsPerMember {
+		return
+	}
+	t.Endpoints = append(t.Endpoints, Endpoint{IP: ip, Port: port})
+}
+
+// sharesEndpoint reports whether the two tickets advertise overlapping
+// (IP, Port) pairs on any family. Used by the matchmaker to avoid pairing
+// a ticket with itself when a client is connected via more than one path.
+func (t *MatchmakingTicket) sharesEndpoint(other *MatchmakingTicket) bool {
+	for _, a := range t.Endpoints {
+		for _, b := range other.Endpoints {
+			if a.IP == b.IP && a.Port == b.Port {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type MatchParticipant struct {
 	TicketID  string
-	IP        string
-	Port      int
+	Endpoints []Endpoint
 	Character string
 	LocalIPs  []string
 	Role      string
@@ -51,10 +91,9 @@ type MatchmakingQueue struct {
 }
 
 type matchmakingPeer struct {
-	IP        string   `json:"ip"`
-	Port      int      `json:"port"`
-	Character string   `json:"character"`
-	LocalIPs  []string `json:"local_ips,omitempty"`
+	Endpoints []Endpoint `json:"endpoints"`
+	Character string     `json:"character"`
+	LocalIPs  []string   `json:"local_ips,omitempty"`
 }
 
 type matchmakingMatchResponse struct {
@@ -73,13 +112,12 @@ type matchmakingQueueResponse struct {
 }
 
 type matchmakingResponse struct {
-	Status string                    `json:"status"`
-	Ticket string                    `json:"ticket"`
-	IP     string                    `json:"ip"`
-	Port   int                       `json:"port"`
-	Token  string                    `json:"token,omitempty"`
-	Match  *matchmakingMatchResponse `json:"match,omitempty"`
-	Queue  *matchmakingQueueResponse `json:"queue,omitempty"`
+	Status    string                    `json:"status"`
+	Ticket    string                    `json:"ticket"`
+	Endpoints []Endpoint                `json:"endpoints"`
+	Token     string                    `json:"token,omitempty"`
+	Match     *matchmakingMatchResponse `json:"match,omitempty"`
+	Queue     *matchmakingQueueResponse `json:"queue,omitempty"`
 }
 
 type matchmakingRequest struct {
@@ -128,20 +166,37 @@ func (m *Match) responseFor(ticketID string) *matchmakingMatchResponse {
 		ID:   m.ID,
 		Role: self.Role,
 		Self: matchmakingPeer{
-			IP:        self.IP,
-			Port:      self.Port,
+			Endpoints: append([]Endpoint(nil), self.Endpoints...),
 			Character: self.Character,
 		},
 		Peer: matchmakingPeer{
-			IP:        peer.IP,
-			Port:      peer.Port,
+			Endpoints: append([]Endpoint(nil), peer.Endpoints...),
 			Character: peer.Character,
 		},
 	}
-	if self.IP != "" && self.IP == peer.IP && len(peer.LocalIPs) > 0 {
+	// LAN candidates are only safe to reveal to a peer that shares one of
+	// our public IPs (i.e. is plausibly behind the same NAT). With two
+	// families per side we check for any overlap; if at least one family
+	// matches between self and peer they likely share at least that NAT
+	// path.
+	if endpointsShareAnyIP(self.Endpoints, peer.Endpoints) && len(peer.LocalIPs) > 0 {
 		response.Peer.LocalIPs = append(response.Peer.LocalIPs, peer.LocalIPs...)
 	}
 	return response
+}
+
+func endpointsShareAnyIP(a, b []Endpoint) bool {
+	for _, x := range a {
+		if x.IP == "" {
+			continue
+		}
+		for _, y := range b {
+			if x.IP == y.IP {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
@@ -204,12 +259,11 @@ func (h *lobbyHandler) matchmakingQueueResponseLocked(ticket *MatchmakingTicket,
 
 func (h *lobbyHandler) matchmakingTicketResponseLocked(status string, ticket *MatchmakingTicket, now time.Time) *matchmakingResponse {
 	return &matchmakingResponse{
-		Status: status,
-		Ticket: ticket.ID,
-		IP:     ticket.IP,
-		Port:   ticket.Port,
-		Token:  ticket.Token,
-		Queue:  h.matchmakingQueueResponseLocked(ticket, now),
+		Status:    status,
+		Ticket:    ticket.ID,
+		Endpoints: append([]Endpoint(nil), ticket.Endpoints...),
+		Token:     ticket.Token,
+		Queue:     h.matchmakingQueueResponseLocked(ticket, now),
 	}
 }
 
@@ -224,16 +278,14 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 			return h.matchmakingTicketResponseLocked("conflict", existing, now), http.StatusConflict
 		}
 
-		existing.IP = ip
-		existing.Port = port
+		existing.mergeEndpoint(ip, port)
 		existing.LocalIPs = localIPs
 		existing.CheckedIn = now
 		if existing.MatchedID != "" {
 			if match, ok := h.Matches[existing.MatchedID]; ok {
 				for i := range match.Players {
 					if match.Players[i].TicketID == existing.ID {
-						match.Players[i].IP = ip
-						match.Players[i].Port = port
+						match.Players[i].Endpoints = append([]Endpoint(nil), existing.Endpoints...)
 					}
 				}
 				resp := h.matchmakingTicketResponseLocked("matched", existing, now)
@@ -266,8 +318,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		ID:        ticketID,
 		Version:   version,
 		Queue:     queue,
-		IP:        ip,
-		Port:      port,
+		Endpoints: []Endpoint{{IP: ip, Port: port}},
 		Token:     ticketToken,
 		Character: character,
 		LocalIPs:  localIPs,
@@ -299,7 +350,7 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 		if other.MatchedID != "" || !other.waiting(now) {
 			continue
 		}
-		if other.IP == ticket.IP && other.Port == ticket.Port {
+		if ticket.sharesEndpoint(other) {
 			continue
 		}
 
@@ -335,8 +386,7 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 func (t *MatchmakingTicket) participantForMatch() MatchParticipant {
 	return MatchParticipant{
 		TicketID:  t.ID,
-		IP:        t.IP,
-		Port:      t.Port,
+		Endpoints: append([]Endpoint(nil), t.Endpoints...),
 		Character: t.Character,
 		LocalIPs:  append([]string(nil), t.LocalIPs...),
 	}
