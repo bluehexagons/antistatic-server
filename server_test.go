@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -331,7 +332,7 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 func TestLobbyLocalIPsRevealedOnlyToSamePublicIP(t *testing.T) {
 	h := newTestLobbyHandler()
 
-	body := `{"local_ips":["192.168.1.5","10.0.0.5"]}`
+	body := `{"local_ips":["192.168.1.5","10.0.0.5"],"local_endpoints":[{"ip":"192.168.1.5","port":45860},{"ip":"10.0.0.99","port":45860},{"ip":"127.0.0.1","port":45860}]}`
 	rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "203.0.113.5:32000", "", body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("first PUT status = %d: %s", rec.Code, rec.Body.String())
@@ -356,6 +357,10 @@ func TestLobbyLocalIPsRevealedOnlyToSamePublicIP(t *testing.T) {
 	if len(firstMember.LocalIPs) != 2 {
 		t.Fatalf("same-NAT peer saw local_ips = %v, want both LAN addresses", firstMember.LocalIPs)
 	}
+	wantLocalEndpoints := []Endpoint{{IP: "192.168.1.5", Port: 45860}, {IP: "127.0.0.1", Port: 45860}}
+	if !reflect.DeepEqual(firstMember.LocalEndpoints, wantLocalEndpoints) {
+		t.Fatalf("same-NAT peer saw local_endpoints = %v, want %v", firstMember.LocalEndpoints, wantLocalEndpoints)
+	}
 
 	// Third peer on a different public IP must not see the LAN IPs.
 	rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45862", "198.51.100.10:32002", "", "")
@@ -364,8 +369,8 @@ func TestLobbyLocalIPsRevealedOnlyToSamePublicIP(t *testing.T) {
 	}
 	resp = decodeLobbyResponse(t, rec)
 	for _, m := range resp.Lobby.Members {
-		if len(m.Endpoints) > 0 && m.Endpoints[0].IP == "203.0.113.5" && m.LocalIPs != nil {
-			t.Fatalf("stranger received local_ips %v from a peer behind a different NAT", m.LocalIPs)
+		if len(m.Endpoints) > 0 && m.Endpoints[0].IP == "203.0.113.5" && (m.LocalIPs != nil || m.LocalEndpoints != nil) {
+			t.Fatalf("stranger received local data %v / %v from a peer behind a different NAT", m.LocalIPs, m.LocalEndpoints)
 		}
 	}
 }

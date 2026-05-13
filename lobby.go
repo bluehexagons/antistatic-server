@@ -71,7 +71,7 @@ func (l *Lobby) Clean() {
 // endpoint. Subsequent refresh PUTs re-merge by family — a port mapping
 // shift on one family just updates that family's endpoint without
 // disturbing the other.
-func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string) (string, error) {
+func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string, localEndpoints []Endpoint) (string, error) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	if token != "" {
@@ -82,6 +82,7 @@ func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string) (s
 			m.MergeEndpoint(ip, port)
 			m.CheckedIn = time.Now()
 			m.LocalIPs = localIPs
+			m.LocalEndpoints = localEndpoints
 			return m.Token, nil
 		}
 		return "", errLobbyMemberTokenMismatch
@@ -99,10 +100,11 @@ func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string) (s
 		return "", err
 	}
 	l.Members = append(l.Members, &Member{
-		Endpoints: []Endpoint{{IP: ip, Port: port}},
-		LocalIPs:  localIPs,
-		Token:     memberToken,
-		CheckedIn: time.Now(),
+		Endpoints:      []Endpoint{{IP: ip, Port: port}},
+		LocalIPs:       localIPs,
+		LocalEndpoints: localEndpoints,
+		Token:          memberToken,
+		CheckedIn:      time.Now(),
 	})
 	return memberToken, nil
 }

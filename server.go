@@ -29,7 +29,7 @@ type serverMetrics struct {
 	clientErrors    atomic.Int64
 	serverErrors    atomic.Int64
 
-	recentMu    sync.Mutex
+	recentMu     sync.Mutex
 	recentErrors []recentError
 }
 
@@ -81,16 +81,16 @@ type lobbyHandler struct {
 }
 
 type healthResponse struct {
-	Status                  string       `json:"status"`
-	LobbyCount              int          `json:"lobby_count"`
-	TicketCount             int          `json:"ticket_count"`
-	MatchCount              int          `json:"match_count"`
-	LobbiesCreated          int64        `json:"lobbies_created"`
-	SuccessfulGamesEstimate int64        `json:"successful_games_estimate"`
-	ClientErrorCount        int64        `json:"client_error_count"`
-	ServerErrorCount        int64        `json:"server_error_count"`
+	Status                  string        `json:"status"`
+	LobbyCount              int           `json:"lobby_count"`
+	TicketCount             int           `json:"ticket_count"`
+	MatchCount              int           `json:"match_count"`
+	LobbiesCreated          int64         `json:"lobbies_created"`
+	SuccessfulGamesEstimate int64         `json:"successful_games_estimate"`
+	ClientErrorCount        int64         `json:"client_error_count"`
+	ServerErrorCount        int64         `json:"server_error_count"`
 	RecentErrors            []recentError `json:"recent_errors,omitempty"`
-	Version                 string       `json:"version"`
+	Version                 string        `json:"version"`
 }
 
 func (h *lobbyHandler) healthResponse() healthResponse {
@@ -233,14 +233,14 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "key", key, "version", version)
 		token := r.Header.Get(antistaticTokenHeader)
 
-		var localIPs []string
+		var checkInData lobbyCheckInData
 		if r.Method == "PUT" {
 			parsed, err := parseLobbyCheckInBody(r)
 			if err != nil {
 				h.respondError(w, "Invalid lobby request body", http.StatusBadRequest)
 				return
 			}
-			localIPs = parsed
+			checkInData = parsed
 		}
 
 		h.Mu.Lock()
@@ -272,7 +272,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "PUT":
 			var err error
-			memberToken, err = l.CheckIn(ip, port, token, localIPs)
+			memberToken, err = l.CheckIn(ip, port, token, checkInData.LocalIPs, checkInData.LocalEndpoints)
 			if err == errLobbyMemberTokenMismatch {
 				h.Mu.Unlock()
 				h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
@@ -355,27 +355,37 @@ const tickInterval = 5 * time.Minute
 // All fields are optional so older clients (and the matchmaking flow that
 // reuses this endpoint shape) keep working with no body at all.
 type lobbyCheckInBody struct {
-	LocalIPs []string `json:"local_ips,omitempty"`
+	LocalIPs       []string   `json:"local_ips,omitempty"`
+	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
+}
+
+type lobbyCheckInData struct {
+	LocalIPs       []string
+	LocalEndpoints []Endpoint
 }
 
 // parseLobbyCheckInBody pulls the optional JSON body off a lobby PUT request,
 // returning the sanitized list of LAN candidate addresses (RFC 1918 / link-
 // local / loopback). Empty body is valid and yields a nil slice.
-func parseLobbyCheckInBody(r *http.Request) ([]string, error) {
+func parseLobbyCheckInBody(r *http.Request) (lobbyCheckInData, error) {
 	if r.Body == nil {
-		return nil, nil
+		return lobbyCheckInData{}, nil
 	}
 	if r.ContentLength == 0 {
-		return nil, nil
+		return lobbyCheckInData{}, nil
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var body lobbyCheckInBody
 	if err := decoder.Decode(&body); err != nil {
 		if err == io.EOF {
-			return nil, nil
+			return lobbyCheckInData{}, nil
 		}
-		return nil, err
+		return lobbyCheckInData{}, err
 	}
-	return sanitizeLocalIPs(body.LocalIPs), nil
+	localIPs := sanitizeLocalIPs(body.LocalIPs)
+	return lobbyCheckInData{
+		LocalIPs:       localIPs,
+		LocalEndpoints: sanitizeLocalEndpoints(body.LocalEndpoints, localIPs),
+	}, nil
 }

@@ -59,21 +59,28 @@ func TestSanitizeLocalIPsCapsAtLimit(t *testing.T) {
 }
 
 func TestMemberViewExposesLocalIPsOnlyToSamePublicIP(t *testing.T) {
-	m := &Member{Endpoints: []Endpoint{{IP: "203.0.113.5", Port: 4444}}, LocalIPs: []string{"192.168.1.5"}}
+	m := &Member{
+		Endpoints:      []Endpoint{{IP: "203.0.113.5", Port: 4444}},
+		LocalIPs:       []string{"192.168.1.5"},
+		LocalEndpoints: []Endpoint{{IP: "192.168.1.5", Port: 4444}},
+	}
 
 	sameNAT := m.View("203.0.113.5")
 	if !reflect.DeepEqual(sameNAT.LocalIPs, []string{"192.168.1.5"}) {
 		t.Fatalf("same-NAT view local IPs = %v, want them visible", sameNAT.LocalIPs)
 	}
+	if !reflect.DeepEqual(sameNAT.LocalEndpoints, []Endpoint{{IP: "192.168.1.5", Port: 4444}}) {
+		t.Fatalf("same-NAT view local endpoints = %v, want them visible", sameNAT.LocalEndpoints)
+	}
 
 	stranger := m.View("198.51.100.10")
-	if stranger.LocalIPs != nil {
-		t.Fatalf("stranger view local IPs = %v, want nil", stranger.LocalIPs)
+	if stranger.LocalIPs != nil || stranger.LocalEndpoints != nil {
+		t.Fatalf("stranger view local data = %v / %v, want nil", stranger.LocalIPs, stranger.LocalEndpoints)
 	}
 
 	noRequester := m.View("")
-	if noRequester.LocalIPs != nil {
-		t.Fatalf("empty-requester view local IPs = %v, want nil", noRequester.LocalIPs)
+	if noRequester.LocalIPs != nil || noRequester.LocalEndpoints != nil {
+		t.Fatalf("empty-requester view local data = %v / %v, want nil", noRequester.LocalIPs, noRequester.LocalEndpoints)
 	}
 }
 

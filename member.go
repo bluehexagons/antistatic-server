@@ -23,10 +23,11 @@ type Member struct {
 	// older clients reading the flat top-level IP/Port fields keep seeing
 	// the same value across refresh cycles). Additional entries are added
 	// when the member checks in over a second address family.
-	Endpoints []Endpoint
-	LocalIPs  []string
-	Token     string
-	CheckedIn time.Time
+	Endpoints      []Endpoint
+	LocalIPs       []string
+	LocalEndpoints []Endpoint
+	Token          string
+	CheckedIn      time.Time
 }
 
 // MemberView is the per-request projection of a Member. Endpoints lists
@@ -34,8 +35,9 @@ type Member struct {
 // LocalIPs are only included for peers behind the same public IP as the
 // requesting client.
 type MemberView struct {
-	Endpoints []Endpoint `json:"endpoints"`
-	LocalIPs  []string   `json:"local_ips,omitempty"`
+	Endpoints      []Endpoint `json:"endpoints"`
+	LocalIPs       []string   `json:"local_ips,omitempty"`
+	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
 }
 
 const memberTimeout = 30 * time.Second
@@ -105,10 +107,11 @@ func (m *Member) View(requesterIP string) MemberView {
 	if len(m.Endpoints) > 0 {
 		v.Endpoints = append(v.Endpoints, m.Endpoints...)
 	}
-	if requesterIP != "" && len(m.LocalIPs) > 0 {
+	if requesterIP != "" && (len(m.LocalIPs) > 0 || len(m.LocalEndpoints) > 0) {
 		for _, e := range m.Endpoints {
 			if e.IP == requesterIP {
 				v.LocalIPs = append(v.LocalIPs, m.LocalIPs...)
+				v.LocalEndpoints = append(v.LocalEndpoints, m.LocalEndpoints...)
 				break
 			}
 		}
