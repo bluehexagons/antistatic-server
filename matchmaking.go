@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -13,6 +15,15 @@ const matchmakingMatchTimeout = 2 * time.Minute
 const maxMatchmakingTickets = 20000
 const maxMatchmakingMatches = 10000
 const maxMatchmakingQueues = 10000
+
+// Long-poll bounds for PUT requests that opt in via the ?wait= query
+// parameter. Clients use this to learn of a match without burning the
+// full client-side polling interval. The interval governs how often we
+// re-check ticket state under the lock; keep it short enough to overlap
+// peer probes but long enough that idle long-polls don't busy-loop the
+// global lock.
+const maxMatchmakingLongPoll = 10 * time.Second
+const matchmakingLongPollCheckInterval = 100 * time.Millisecond
 
 type MatchmakingTicket struct {
 	ID             string     `json:"id"`
@@ -100,10 +111,15 @@ type matchmakingPeer struct {
 }
 
 type matchmakingMatchResponse struct {
-	ID   string          `json:"id"`
-	Role string          `json:"role"`
-	Peer matchmakingPeer `json:"peer"`
-	Self matchmakingPeer `json:"self"`
+	ID        string          `json:"id"`
+	Role      string          `json:"role"`
+	Peer      matchmakingPeer `json:"peer"`
+	Self      matchmakingPeer `json:"self"`
+	// MatchedAtMs is the server-clock Unix-millisecond timestamp at which
+	// the match was registered. Both peers receive the same value so they
+	// can anchor their first hole-punch probe to a shared instant rather
+	// than to whenever their own poll happened to learn of the match.
+	MatchedAtMs int64 `json:"matched_at_ms,omitempty"`
 }
 
 type matchmakingQueueResponse struct {
@@ -177,6 +193,7 @@ func (m *Match) responseFor(ticketID string) *matchmakingMatchResponse {
 			Endpoints: append([]Endpoint(nil), peer.Endpoints...),
 			Character: peer.Character,
 		},
+		MatchedAtMs: m.CreatedAt.UnixMilli(),
 	}
 	// LAN candidates are only safe to reveal to a peer that shares one of
 	// our public IPs (i.e. is plausibly behind the same NAT). With two
@@ -534,6 +551,79 @@ func (h *lobbyHandler) deleteTicketLocked(version, queue, ticketID string) {
 	delete(h.Tickets, key)
 }
 
+// parseLongPollWait extracts the ?wait= duration (in seconds) from the
+// request query, clamped to [0, maxMatchmakingLongPoll]. Malformed or
+// missing values disable long-polling and return 0.
+func parseLongPollWait(r *http.Request) time.Duration {
+	raw := r.URL.Query().Get("wait")
+	if raw == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	wait := time.Duration(seconds) * time.Second
+	if wait > maxMatchmakingLongPoll {
+		wait = maxMatchmakingLongPoll
+	}
+	return wait
+}
+
+// waitForMatchmakingResult polls the matchmaking state at a short interval
+// until either the ticket becomes matched, the deadline elapses, or the
+// client disconnects. The caller's existing (resp, status) is the fallback
+// returned when no match is observed before the deadline. The poll
+// re-acquires the global lock on each tick; the interval is short enough
+// for snappy match-notification but long enough to keep lock churn
+// bounded under load.
+func (h *lobbyHandler) waitForMatchmakingResult(
+	ctx context.Context,
+	version, queue, ticketID, token string,
+	wait time.Duration,
+	fallbackResp *matchmakingResponse,
+	fallbackStatus int,
+) (*matchmakingResponse, int) {
+	deadline := time.Now().Add(wait)
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	if !timer.Stop() {
+		<-timer.C
+	}
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fallbackResp, fallbackStatus
+		}
+		interval := matchmakingLongPollCheckInterval
+		if interval > remaining {
+			interval = remaining
+		}
+		timer.Reset(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return fallbackResp, fallbackStatus
+		case <-timer.C:
+		}
+
+		h.Mu.Lock()
+		resp, status := h.matchmakingStateLocked(version, queue, ticketID, token, time.Now())
+		h.Mu.Unlock()
+		// If the ticket disappeared (timed out, canceled, server cleanup),
+		// return the original fallback rather than surfacing a confusing
+		// 404 to a client that just successfully PUT.
+		if resp == nil {
+			continue
+		}
+		if resp.Match != nil {
+			return resp, status
+		}
+	}
+}
+
 func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, ip, version, queue, ticket string, port int) {
 	if !validateVersion(version) {
 		h.respondError(w, "Invalid version", http.StatusBadRequest)
@@ -587,6 +677,17 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 
 	h.Mu.Unlock()
+
+	// Long-poll on PUT: if the ticket is still waiting and the client asked
+	// us to wait, re-check state at a short interval until a match appears,
+	// the deadline elapses, or the client disconnects. This lets clients
+	// learn of a match within ~100ms of registration instead of waiting for
+	// their next regular poll.
+	if r.Method == http.MethodPut && status == http.StatusOK && resp != nil && resp.Status == "waiting" {
+		if wait := parseLongPollWait(r); wait > 0 {
+			resp, status = h.waitForMatchmakingResult(r.Context(), version, queue, ticket, token, wait, resp, status)
+		}
+	}
 
 	if status == http.StatusNoContent {
 		w.WriteHeader(status)

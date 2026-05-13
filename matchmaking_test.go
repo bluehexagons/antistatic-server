@@ -224,6 +224,84 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 	}
 }
 
+func TestMatchmakingPutLongPollWakesOnMatch(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial PUT returned %d: %s", first.Code, first.Body.String())
+	}
+	tokenA := decodeMatchmakingResponse(t, first).Token
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	started := time.Now()
+	go func() {
+		done <- serveMatchmakingRequestWithToken(
+			h,
+			http.MethodPut,
+			"/0.9.5/matchmaking/default/TicketA/45860?wait=2",
+			"198.51.100.10:32000",
+			matchmakingRequest{Character: "Carbon"},
+			tokenA,
+		)
+	}()
+
+	// Give the goroutine a chance to enter the long-poll wait, then register
+	// a compatible ticket so the long-poller's next check sees the match.
+	time.Sleep(150 * time.Millisecond)
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Character: "Silicon"})
+	if second.Code != http.StatusOK {
+		t.Fatalf("second PUT returned %d: %s", second.Code, second.Body.String())
+	}
+
+	rec := <-done
+	elapsed := time.Since(started)
+	if elapsed > time.Second {
+		t.Fatalf("long-poll took %v, expected to wake within 1s of the match", elapsed)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("long-poll PUT returned %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := decodeMatchmakingResponse(t, rec)
+	if resp.Status != "matched" || resp.Match == nil {
+		t.Fatalf("long-poll response = %#v, want matched with peer data", resp)
+	}
+	if resp.Match.MatchedAtMs == 0 {
+		t.Fatalf("MatchedAtMs was not populated in match response: %#v", resp.Match)
+	}
+}
+
+func TestMatchmakingPutLongPollTimesOut(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial PUT returned %d: %s", first.Code, first.Body.String())
+	}
+	tokenA := decodeMatchmakingResponse(t, first).Token
+
+	started := time.Now()
+	rec := serveMatchmakingRequestWithToken(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketA/45860?wait=1",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		tokenA,
+	)
+	elapsed := time.Since(started)
+	if elapsed < 900*time.Millisecond {
+		t.Fatalf("long-poll returned in %v, expected to wait at least ~1s", elapsed)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("long-poll PUT returned %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := decodeMatchmakingResponse(t, rec)
+	if resp.Status != "waiting" || resp.Match != nil {
+		t.Fatalf("long-poll response = %#v, want still waiting", resp)
+	}
+}
+
 func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 	h := newTestLobbyHandler()
 
