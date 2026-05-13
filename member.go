@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"strconv"
 	"time"
 )
 
@@ -157,6 +158,40 @@ func sanitizeLocalIPs(in []string) []string {
 		}
 		seen[canonical] = struct{}{}
 		out = append(out, canonical)
+		if len(out) >= maxLocalIPsPerMember {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func sanitizeLocalEndpoints(in []Endpoint) []Endpoint {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]Endpoint, 0, len(in))
+	for _, raw := range in {
+		if !validatePort(raw.Port) || raw.Port == 0 || len(raw.IP) == 0 || len(raw.IP) > maxLocalIPLength {
+			continue
+		}
+		parsed := net.ParseIP(raw.IP)
+		if parsed == nil {
+			continue
+		}
+		if !isLocalScopeIP(parsed) {
+			continue
+		}
+		canonical := parsed.String()
+		key := canonical + ":" + strconv.Itoa(raw.Port)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, Endpoint{IP: canonical, Port: raw.Port})
 		if len(out) >= maxLocalIPsPerMember {
 			break
 		}

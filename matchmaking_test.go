@@ -232,7 +232,16 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketA/45860",
 		"203.0.113.5:32000",
-		matchmakingRequest{Character: "Carbon", LocalIPs: []string{"8.8.8.8", "192.168.1.20"}},
+		matchmakingRequest{
+			Character: "Carbon",
+			LocalIPs:  []string{"8.8.8.8", "192.168.1.20"},
+			LocalEndpoints: []Endpoint{
+				{IP: "8.8.8.8", Port: 45860},
+				{IP: "127.0.0.1", Port: 45860},
+				{IP: "192.168.1.20", Port: 45860},
+				{IP: "192.168.1.20", Port: 0},
+			},
+		},
 	)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first PUT returned %d", first.Code)
@@ -252,13 +261,21 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 	if !reflect.DeepEqual(response.Match.Peer.LocalIPs, []string{"192.168.1.20"}) {
 		t.Fatalf("same-public-IP peer local_ips = %v, want sanitized LAN IP", response.Match.Peer.LocalIPs)
 	}
+	wantLocalEndpoints := []Endpoint{{IP: "127.0.0.1", Port: 45860}, {IP: "192.168.1.20", Port: 45860}}
+	if !reflect.DeepEqual(response.Match.Peer.LocalEndpoints, wantLocalEndpoints) {
+		t.Fatalf("same-public-IP peer local_endpoints = %v, want %v", response.Match.Peer.LocalEndpoints, wantLocalEndpoints)
+	}
 
 	third := serveMatchmakingRequest(
 		h,
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketC/45862",
 		"203.0.113.6:32002",
-		matchmakingRequest{Character: "Carbon", LocalIPs: []string{"192.168.2.20"}},
+		matchmakingRequest{
+			Character:      "Carbon",
+			LocalIPs:       []string{"192.168.2.20"},
+			LocalEndpoints: []Endpoint{{IP: "192.168.2.20", Port: 45862}},
+		},
 	)
 	if third.Code != http.StatusOK {
 		t.Fatalf("third PUT returned %d", third.Code)
@@ -277,6 +294,9 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 	}
 	if response.Match.Peer.LocalIPs != nil {
 		t.Fatalf("different-public-IP peer local_ips = %v, want nil", response.Match.Peer.LocalIPs)
+	}
+	if response.Match.Peer.LocalEndpoints != nil {
+		t.Fatalf("different-public-IP peer local_endpoints = %v, want nil", response.Match.Peer.LocalEndpoints)
 	}
 }
 
