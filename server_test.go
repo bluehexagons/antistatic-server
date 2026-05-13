@@ -319,8 +319,17 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	if resp.LobbyCount != 1 || resp.MatchCount != 1 || resp.LobbiesCreated != 1 || resp.SuccessfulGamesEstimate != 1 || resp.ClientErrorCount != 1 {
 		t.Fatalf("health payload = %#v, want counters", resp)
 	}
-	if resp.Version != "0.8.0" {
-		t.Fatalf("health version = %q, want 0.8.0", resp.Version)
+	if resp.Version != serverVersion {
+		t.Fatalf("health version = %q, want %q", resp.Version, serverVersion)
+	}
+}
+
+func TestNormalizeServerVersion(t *testing.T) {
+	if got := normalizeServerVersion("v0.9.0"); got != "0.9.0" {
+		t.Fatalf("normalizeServerVersion(v0.9.0) = %q, want 0.9.0", got)
+	}
+	if got := normalizeServerVersion("(devel)"); got != "(devel)" {
+		t.Fatalf("normalizeServerVersion((devel)) = %q, want (devel)", got)
 	}
 }
 
@@ -409,22 +418,3 @@ func TestLobbyDropsPublicLocalIPs(t *testing.T) {
 		}
 	}
 }
-func TestLobbyAcceptsLegacyAddressEndpoints(t *testing.T) {
-h := newTestLobbyHandler()
-
-body := `{"local_ips":["192.168.1.5"],"local_endpoints":[{"address":"192.168.1.5","port":45860},{"address":"127.0.0.1","port":45860}]}`
-rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "203.0.113.5:32000", "", body)
-if rec.Code != http.StatusOK {
-t.Fatalf("legacy address PUT status = %d: %s", rec.Code, rec.Body.String())
-}
-
-resp := decodeLobbyResponse(t, rec)
-if resp.Lobby == nil || len(resp.Lobby.Members) != 1 {
-t.Fatalf("legacy address response lobby = %#v, want one member", resp.Lobby)
-}
-wantLocalEndpoints := []Endpoint{{IP: "192.168.1.5", Port: 45860}, {IP: "127.0.0.1", Port: 45860}}
-if !reflect.DeepEqual(resp.Lobby.Members[0].LocalEndpoints, wantLocalEndpoints) {
-t.Fatalf("legacy address local_endpoints = %v, want %v", resp.Lobby.Members[0].LocalEndpoints, wantLocalEndpoints)
-}
-}
-

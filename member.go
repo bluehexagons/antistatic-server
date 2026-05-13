@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"net"
 	"strconv"
 	"time"
@@ -17,29 +15,6 @@ import (
 type Endpoint struct {
 	IP   string `json:"ip"`
 	Port int    `json:"port"`
-}
-
-func (e *Endpoint) UnmarshalJSON(data []byte) error {
-	type endpointBody struct {
-		IP      string `json:"ip"`
-		Address string `json:"address"`
-		Port    int    `json:"port"`
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-
-	var body endpointBody
-	if err := decoder.Decode(&body); err != nil {
-		return err
-	}
-
-	e.IP = body.IP
-	if e.IP == "" {
-		e.IP = body.Address
-	}
-	e.Port = body.Port
-	return nil
 }
 
 type Member struct {

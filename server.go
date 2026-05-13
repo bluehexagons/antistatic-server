@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,23 @@ const maxPathLength = 512
 const maxLobbies = 10000
 
 const recentErrorCap = 20
+
+var serverVersion = resolveServerVersion()
+
+func resolveServerVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" {
+		return "unknown"
+	}
+	return normalizeServerVersion(info.Main.Version)
+}
+
+func normalizeServerVersion(version string) string {
+	if len(version) > 1 && version[0] == 'v' && version[1] >= '0' && version[1] <= '9' {
+		return version[1:]
+	}
+	return version
+}
 
 type recentError struct {
 	Time    time.Time `json:"time"`
@@ -105,7 +123,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		ClientErrorCount:        h.Metrics.clientErrors.Load(),
 		ServerErrorCount:        h.Metrics.serverErrors.Load(),
 		RecentErrors:            h.Metrics.snapshotRecentErrors(),
-		Version:                 "0.8.1",
+		Version:                 serverVersion,
 	}
 	h.Mu.RUnlock()
 	return resp
