@@ -168,9 +168,13 @@ func sanitizeLocalIPs(in []string) []string {
 	return out
 }
 
-func sanitizeLocalEndpoints(in []Endpoint) []Endpoint {
+func sanitizeLocalEndpoints(in []Endpoint, localIPs []string) []Endpoint {
 	if len(in) == 0 {
 		return nil
+	}
+	allowed := make(map[string]struct{}, len(localIPs))
+	for _, ip := range localIPs {
+		allowed[ip] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(in))
 	out := make([]Endpoint, 0, len(in))
@@ -186,6 +190,11 @@ func sanitizeLocalEndpoints(in []Endpoint) []Endpoint {
 			continue
 		}
 		canonical := parsed.String()
+		if !parsed.IsLoopback() {
+			if _, ok := allowed[canonical]; !ok {
+				continue
+			}
+		}
 		key := canonical + ":" + strconv.Itoa(raw.Port)
 		if _, dup := seen[key]; dup {
 			continue

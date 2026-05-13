@@ -565,7 +565,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		request.LocalIPs = sanitizeLocalIPs(request.LocalIPs)
-		request.LocalEndpoints = sanitizeLocalEndpoints(request.LocalEndpoints)
+		request.LocalEndpoints = sanitizeLocalEndpoints(request.LocalEndpoints, request.LocalIPs)
 	}
 
 	now := time.Now()

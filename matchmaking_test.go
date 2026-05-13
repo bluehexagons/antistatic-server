@@ -237,6 +237,7 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 			LocalIPs:  []string{"8.8.8.8", "192.168.1.20"},
 			LocalEndpoints: []Endpoint{
 				{IP: "8.8.8.8", Port: 45860},
+				{IP: "10.0.0.99", Port: 45860},
 				{IP: "127.0.0.1", Port: 45860},
 				{IP: "192.168.1.20", Port: 45860},
 				{IP: "192.168.1.20", Port: 0},
