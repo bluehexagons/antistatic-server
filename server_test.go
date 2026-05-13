@@ -409,3 +409,22 @@ func TestLobbyDropsPublicLocalIPs(t *testing.T) {
 		}
 	}
 }
+func TestLobbyAcceptsLegacyAddressEndpoints(t *testing.T) {
+h := newTestLobbyHandler()
+
+body := `{"local_ips":["192.168.1.5"],"local_endpoints":[{"address":"192.168.1.5","port":45860},{"address":"127.0.0.1","port":45860}]}`
+rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "203.0.113.5:32000", "", body)
+if rec.Code != http.StatusOK {
+t.Fatalf("legacy address PUT status = %d: %s", rec.Code, rec.Body.String())
+}
+
+resp := decodeLobbyResponse(t, rec)
+if resp.Lobby == nil || len(resp.Lobby.Members) != 1 {
+t.Fatalf("legacy address response lobby = %#v, want one member", resp.Lobby)
+}
+wantLocalEndpoints := []Endpoint{{IP: "192.168.1.5", Port: 45860}, {IP: "127.0.0.1", Port: 45860}}
+if !reflect.DeepEqual(resp.Lobby.Members[0].LocalEndpoints, wantLocalEndpoints) {
+t.Fatalf("legacy address local_endpoints = %v, want %v", resp.Lobby.Members[0].LocalEndpoints, wantLocalEndpoints)
+}
+}
+

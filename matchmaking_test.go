@@ -379,6 +379,39 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 	}
 }
 
+func TestMatchmakingAcceptsLegacyAddressEndpoints(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	rec := serveMatchmakingRequest(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketA/45860",
+		"203.0.113.5:32000",
+		map[string]any{
+			"character": "Carbon",
+			"local_ips": []string{"192.168.1.20"},
+			"local_endpoints": []map[string]any{
+				{"address": "192.168.1.20", "port": 45860},
+				{"address": "127.0.0.1", "port": 45860},
+			},
+		},
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("legacy address PUT returned %d: %s", rec.Code, rec.Body.String())
+	}
+
+	response := decodeMatchmakingResponse(t, rec)
+	if response.Status != "waiting" {
+		t.Fatalf("legacy address response = %#v, want waiting", response)
+	}
+
+	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
+	wantLocalEndpoints := []Endpoint{{IP: "192.168.1.20", Port: 45860}, {IP: "127.0.0.1", Port: 45860}}
+	if ticket == nil || !reflect.DeepEqual(ticket.LocalEndpoints, wantLocalEndpoints) {
+		t.Fatalf("ticket local_endpoints = %#v, want %v", ticket, wantLocalEndpoints)
+	}
+}
+
 func TestMatchmakingDoesNotMatchSameEndpoint(t *testing.T) {
 	h := newTestLobbyHandler()
 	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
