@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ const maxLobbies = 10000
 const recentErrorCap = 20
 
 var serverVersion = resolveServerVersion()
+var serverStartTime = time.Now()
 
 func resolveServerVersion() string {
 	info, ok := debug.ReadBuildInfo()
@@ -41,6 +43,11 @@ type recentError struct {
 	Status  int       `json:"status"`
 }
 
+type pathCount struct {
+	Path  string `json:"path"`
+	Count int64  `json:"count"`
+}
+
 type serverMetrics struct {
 	lobbiesCreated  atomic.Int64
 	successfulGames atomic.Int64
@@ -49,6 +56,9 @@ type serverMetrics struct {
 
 	recentMu     sync.Mutex
 	recentErrors []recentError
+
+	unknownPathMu     sync.Mutex
+	unknownPathCounts map[string]int64
 }
 
 func (m *serverMetrics) recordLobbyCreated() {
@@ -84,6 +94,44 @@ func (m *serverMetrics) snapshotRecentErrors() []recentError {
 	return out
 }
 
+func (m *serverMetrics) recordUnknownPath(path string) {
+	const maxUnknownPathKeys = 1000
+	if len(path) > 64 {
+		path = path[:64]
+	}
+	m.unknownPathMu.Lock()
+	if m.unknownPathCounts == nil {
+		m.unknownPathCounts = make(map[string]int64)
+	}
+	if _, exists := m.unknownPathCounts[path]; exists || len(m.unknownPathCounts) < maxUnknownPathKeys {
+		m.unknownPathCounts[path]++
+	}
+	m.unknownPathMu.Unlock()
+}
+
+func (m *serverMetrics) snapshotUnknownPaths() []pathCount {
+	const maxUnknownPathsInResponse = 20
+	m.unknownPathMu.Lock()
+	defer m.unknownPathMu.Unlock()
+	if len(m.unknownPathCounts) == 0 {
+		return nil
+	}
+	out := make([]pathCount, 0, len(m.unknownPathCounts))
+	for p, c := range m.unknownPathCounts {
+		out = append(out, pathCount{Path: p, Count: c})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Path < out[j].Path
+	})
+	if len(out) > maxUnknownPathsInResponse {
+		out = out[:maxUnknownPathsInResponse]
+	}
+	return out
+}
+
 type lobbyHandler struct {
 	Mu       sync.RWMutex
 	Lobbies  map[string]*Lobby
@@ -100,6 +148,7 @@ type lobbyHandler struct {
 
 type healthResponse struct {
 	Status                  string        `json:"status"`
+	StartTime               time.Time     `json:"start_time"`
 	LobbyCount              int           `json:"lobby_count"`
 	TicketCount             int           `json:"ticket_count"`
 	MatchCount              int           `json:"match_count"`
@@ -108,6 +157,7 @@ type healthResponse struct {
 	ClientErrorCount        int64         `json:"client_error_count"`
 	ServerErrorCount        int64         `json:"server_error_count"`
 	RecentErrors            []recentError `json:"recent_errors,omitempty"`
+	UnknownPaths            []pathCount   `json:"unknown_paths,omitempty"`
 	Version                 string        `json:"version"`
 }
 
@@ -115,6 +165,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 	h.Mu.RLock()
 	resp := healthResponse{
 		Status:                  "ok",
+		StartTime:               serverStartTime,
 		LobbyCount:              len(h.Lobbies),
 		TicketCount:             len(h.Tickets),
 		MatchCount:              len(h.Matches),
@@ -123,6 +174,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		ClientErrorCount:        h.Metrics.clientErrors.Load(),
 		ServerErrorCount:        h.Metrics.serverErrors.Load(),
 		RecentErrors:            h.Metrics.snapshotRecentErrors(),
+		UnknownPaths:            h.Metrics.snapshotUnknownPaths(),
 		Version:                 serverVersion,
 	}
 	h.Mu.RUnlock()
@@ -199,6 +251,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	path := strings.Trim(r.URL.Path, "/")
 	if path == "" {
+		h.Metrics.recordUnknownPath("")
 		h.respondError(w, "Invalid path", http.StatusNotFound)
 		return
 	}
@@ -208,11 +261,13 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	info := parts
 	if parts[0] != "lobby" {
 		if len(parts) < 2 {
+			h.Metrics.recordUnknownPath(parts[0])
 			h.respondError(w, "Invalid path", http.StatusNotFound)
 			return
 		}
 		version = parts[0]
 		if !validateVersion(version) {
+			h.Metrics.recordUnknownPath(parts[0])
 			h.respondError(w, "Invalid version", http.StatusBadRequest)
 			return
 		}
@@ -220,6 +275,11 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(info) < 1 || info[0] != "lobby" {
 		if len(info) < 1 || info[0] != "matchmaking" {
+			segment := ""
+			if len(info) > 0 {
+				segment = info[0]
+			}
+			h.Metrics.recordUnknownPath(version + "/" + segment)
 			h.respondError(w, "Invalid path", http.StatusNotFound)
 			return
 		}

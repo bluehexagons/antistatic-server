@@ -45,6 +45,13 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 }
 
+func robotsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("User-agent: *\nDisallow: /\n"))
+}
+
 func main() {
 	slogLevel := &slog.LevelVar{}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -91,6 +98,7 @@ func main() {
 	var wg sync.WaitGroup
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/robots.txt", robotsHandler)
 	mux.Handle("/", handler)
 
 	var mgr *autocert.Manager
