@@ -15,6 +15,10 @@ func serveMatchmakingRequest(h *lobbyHandler, method, target, remoteAddr string,
 }
 
 func serveMatchmakingRequestWithToken(h *lobbyHandler, method, target, remoteAddr string, body any, token string) *httptest.ResponseRecorder {
+	return serveMatchmakingRequestWithTokenAndTags(h, method, target, remoteAddr, body, token, "", "")
+}
+
+func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, remoteAddr string, body any, token, selfTag, peerTag string) *httptest.ResponseRecorder {
 	var reader *bytes.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -30,6 +34,12 @@ func serveMatchmakingRequestWithToken(h *lobbyHandler, method, target, remoteAdd
 	req.RemoteAddr = remoteAddr
 	if token != "" {
 		req.Header.Set(antistaticTokenHeader, token)
+	}
+	if selfTag != "" {
+		req.Header.Set(antistaticMatchSelfTagHeader, selfTag)
+	}
+	if peerTag != "" {
+		req.Header.Set(antistaticMatchPeerTagHeader, peerTag)
 	}
 	rec := httptest.NewRecorder()
 
@@ -221,6 +231,177 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 		if ticket.MatchedID == "" {
 			t.Fatalf("waiting ticket remained after match: %#v", ticket)
 		}
+	}
+}
+
+func TestMatchmakingCodeQueueRequiresValidTagHeaders(t *testing.T) {
+	h := newTestLobbyHandler()
+	body := matchmakingRequest{Character: "Carbon"}
+
+	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860", "198.51.100.10:32000", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing tag headers returned %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-charl3/TicketA/45860",
+		"198.51.100.10:32000",
+		body,
+		"",
+		"ALPHA1",
+		"BRAVO2",
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("mismatched tag headers returned %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-alpha1/TicketA/45860",
+		"198.51.100.10:32000",
+		body,
+		"",
+		"ALPHA1",
+		"ALPHA1",
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("same self/peer tag headers returned %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestMatchmakingCodeQueueLeasesTagsAndMatchesReciprocalSearch(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/CODE.BRAVO2-ALPHA1/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		"",
+		"alpha1",
+		"bravo2",
+	)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first code PUT returned %d: %s", first.Code, first.Body.String())
+	}
+	firstResp := decodeMatchmakingResponse(t, first)
+	if firstResp.Status != "waiting" || firstResp.Token == "" {
+		t.Fatalf("first code response = %#v, want waiting with token", firstResp)
+	}
+
+	h.Mu.RLock()
+	_, ticketStored := h.Tickets[matchmakingTicketKey("0.9.5", "code.alpha1-bravo2", "TicketA")]
+	leaseCount := len(h.TagLeases)
+	h.Mu.RUnlock()
+	if !ticketStored || leaseCount != 1 {
+		t.Fatalf("after first PUT ticketStored=%v leases=%d, want true/1", ticketStored, leaseCount)
+	}
+
+	second := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
+		"198.51.100.20:32000",
+		matchmakingRequest{Character: "Silicon"},
+		"",
+		"BRAVO2",
+		"ALPHA1",
+	)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second code PUT returned %d: %s", second.Code, second.Body.String())
+	}
+	secondResp := decodeMatchmakingResponse(t, second)
+	if secondResp.Status != "matched" || secondResp.Match == nil {
+		t.Fatalf("second code response = %#v, want matched", secondResp)
+	}
+	if secondResp.Match.Role != "client" || secondResp.Match.Peer.Character != "Carbon" || secondResp.Match.Self.Character != "Silicon" {
+		t.Fatalf("code match = %#v, want reciprocal Carbon/Silicon match", secondResp.Match)
+	}
+
+	h.Mu.RLock()
+	defer h.Mu.RUnlock()
+	if len(h.TagLeases) != 0 {
+		t.Fatalf("tag leases = %d after match, want released", len(h.TagLeases))
+	}
+}
+
+func TestMatchmakingCodeTagLeaseRejectsDifferentToken(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+	)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first code PUT returned %d: %s", first.Code, first.Body.String())
+	}
+
+	conflict := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
+		"198.51.100.20:32000",
+		matchmakingRequest{Character: "Silicon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+	)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("duplicate self tag returned %d, want %d", conflict.Code, http.StatusConflict)
+	}
+
+	h.Mu.RLock()
+	defer h.Mu.RUnlock()
+	if len(h.Tickets) != 1 || len(h.TagLeases) != 1 || len(h.Matches) != 0 {
+		t.Fatalf("state after duplicate tag: tickets=%d leases=%d matches=%d, want 1/1/0", len(h.Tickets), len(h.TagLeases), len(h.Matches))
+	}
+}
+
+func TestMatchmakingCodeTagLeaseReleasedOnDelete(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+	)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first code PUT returned %d: %s", first.Code, first.Body.String())
+	}
+	token := decodeMatchmakingResponse(t, first).Token
+
+	deleted := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860", "198.51.100.10:32000", nil, token)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete returned %d, want %d: %s", deleted.Code, http.StatusOK, deleted.Body.String())
+	}
+
+	second := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
+		"198.51.100.20:32000",
+		matchmakingRequest{Character: "Silicon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+	)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second lease after delete returned %d, want %d: %s", second.Code, http.StatusOK, second.Body.String())
 	}
 }
 

@@ -133,17 +133,18 @@ func (m *serverMetrics) snapshotUnknownPaths() []pathCount {
 }
 
 type lobbyHandler struct {
-	Mu       sync.RWMutex
-	Lobbies  map[string]*Lobby
-	Tickets  map[string]*MatchmakingTicket
-	Waiting  map[string]map[string]*MatchmakingTicket
-	Matches  map[string]*Match
-	Queues   map[string]*MatchmakingQueue
-	Metrics  serverMetrics
-	Ticker   *time.Ticker
-	Done     chan struct{}
-	Once     sync.Once
-	StopOnce sync.Once
+	Mu        sync.RWMutex
+	Lobbies   map[string]*Lobby
+	Tickets   map[string]*MatchmakingTicket
+	Waiting   map[string]map[string]*MatchmakingTicket
+	Matches   map[string]*Match
+	Queues    map[string]*MatchmakingQueue
+	TagLeases map[string]*MatchmakingTagLease
+	Metrics   serverMetrics
+	Ticker    *time.Ticker
+	Done      chan struct{}
+	Once      sync.Once
+	StopOnce  sync.Once
 }
 
 type healthResponse struct {
@@ -152,6 +153,7 @@ type healthResponse struct {
 	LobbyCount              int           `json:"lobby_count"`
 	TicketCount             int           `json:"ticket_count"`
 	MatchCount              int           `json:"match_count"`
+	TagLeaseCount           int           `json:"tag_lease_count"`
 	LobbiesCreated          int64         `json:"lobbies_created"`
 	SuccessfulGamesEstimate int64         `json:"successful_games_estimate"`
 	ClientErrorCount        int64         `json:"client_error_count"`
@@ -169,6 +171,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		LobbyCount:              len(h.Lobbies),
 		TicketCount:             len(h.Tickets),
 		MatchCount:              len(h.Matches),
+		TagLeaseCount:           len(h.TagLeases),
 		LobbiesCreated:          h.Metrics.lobbiesCreated.Load(),
 		SuccessfulGamesEstimate: h.Metrics.successfulGames.Load(),
 		ClientErrorCount:        h.Metrics.clientErrors.Load(),
@@ -420,11 +423,12 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 var handler = &lobbyHandler{
-	Lobbies: map[string]*Lobby{},
-	Tickets: map[string]*MatchmakingTicket{},
-	Waiting: map[string]map[string]*MatchmakingTicket{},
-	Matches: map[string]*Match{},
-	Queues:  map[string]*MatchmakingQueue{},
+	Lobbies:   map[string]*Lobby{},
+	Tickets:   map[string]*MatchmakingTicket{},
+	Waiting:   map[string]map[string]*MatchmakingTicket{},
+	Matches:   map[string]*Match{},
+	Queues:    map[string]*MatchmakingQueue{},
+	TagLeases: map[string]*MatchmakingTagLease{},
 }
 
 const tickInterval = 5 * time.Minute

@@ -15,6 +15,10 @@ const matchmakingMatchTimeout = 2 * time.Minute
 const maxMatchmakingTickets = 20000
 const maxMatchmakingMatches = 10000
 const maxMatchmakingQueues = 10000
+const maxMatchmakingTagLeases = maxMatchmakingTickets
+const matchCodeQueuePrefix = "code."
+const antistaticMatchSelfTagHeader = "X-Antistatic-Match-Self-Tag"
+const antistaticMatchPeerTagHeader = "X-Antistatic-Match-Peer-Tag"
 
 // Long-poll bounds for PUT requests that opt in via the ?wait= query
 // parameter. Clients use this to learn of a match without burning the
@@ -31,12 +35,27 @@ type MatchmakingTicket struct {
 	Queue          string     `json:"queue"`
 	Endpoints      []Endpoint `json:"endpoints"`
 	Token          string     `json:"-"`
+	SelfTag        string     `json:"-"`
+	PeerTag        string     `json:"-"`
 	Character      string     `json:"character"`
 	LocalIPs       []string   `json:"local_ips,omitempty"`
 	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	CheckedIn      time.Time  `json:"checked_in"`
 	MatchedID      string     `json:"matched_id"`
+}
+
+type MatchmakingTagLease struct {
+	Version   string
+	Tag       string
+	Token     string
+	TicketKey string
+	CheckedIn time.Time
+}
+
+type matchmakingTagPair struct {
+	Self string
+	Peer string
 }
 
 // matchesAnyEndpoint reports whether the ticket already lists this
@@ -81,6 +100,13 @@ func (t *MatchmakingTicket) sharesEndpoint(other *MatchmakingTicket) bool {
 	return false
 }
 
+func (t *MatchmakingTicket) tagMatches(other *MatchmakingTicket) bool {
+	if t.SelfTag == "" && t.PeerTag == "" && other.SelfTag == "" && other.PeerTag == "" {
+		return true
+	}
+	return t.SelfTag != "" && t.PeerTag != "" && t.SelfTag == other.PeerTag && t.PeerTag == other.SelfTag
+}
+
 type MatchParticipant struct {
 	TicketID       string
 	Endpoints      []Endpoint
@@ -111,10 +137,10 @@ type matchmakingPeer struct {
 }
 
 type matchmakingMatchResponse struct {
-	ID        string          `json:"id"`
-	Role      string          `json:"role"`
-	Peer      matchmakingPeer `json:"peer"`
-	Self      matchmakingPeer `json:"self"`
+	ID   string          `json:"id"`
+	Role string          `json:"role"`
+	Peer matchmakingPeer `json:"peer"`
+	Self matchmakingPeer `json:"self"`
 	// MatchedAtMs is the server-clock Unix-millisecond timestamp at which
 	// the match was registered. Both peers receive the same value so they
 	// can anchor their first hole-punch probe to a shared instant rather
@@ -151,6 +177,66 @@ func matchmakingTicketKey(version, queue, ticket string) string {
 
 func matchmakingQueueKey(version, queue string) string {
 	return strings.Join([]string{version, queue}, "|")
+}
+
+func matchmakingTagLeaseKey(version, tag string) string {
+	return strings.Join([]string{version, strings.ToUpper(tag)}, "|")
+}
+
+func normalizeMatchmakingTag(tag string) string {
+	return strings.ToUpper(strings.TrimSpace(tag))
+}
+
+func canonicalMatchCodeQueue(selfTag, peerTag string) string {
+	a := strings.ToLower(selfTag)
+	b := strings.ToLower(peerTag)
+	if b < a {
+		a, b = b, a
+	}
+	return matchCodeQueuePrefix + a + "-" + b
+}
+
+func parseMatchCodeQueue(queue string) (matchmakingTagPair, bool) {
+	lower := strings.ToLower(queue)
+	if !strings.HasPrefix(lower, matchCodeQueuePrefix) {
+		return matchmakingTagPair{}, false
+	}
+	parts := strings.Split(lower[len(matchCodeQueuePrefix):], "-")
+	if len(parts) != 2 {
+		return matchmakingTagPair{}, false
+	}
+	first := normalizeMatchmakingTag(parts[0])
+	second := normalizeMatchmakingTag(parts[1])
+	if !validateMatchmakingTag(first) || !validateMatchmakingTag(second) {
+		return matchmakingTagPair{}, false
+	}
+	return matchmakingTagPair{Self: first, Peer: second}, true
+}
+
+func normalizeMatchmakingQueue(queue string) (string, bool) {
+	if !strings.HasPrefix(strings.ToLower(queue), matchCodeQueuePrefix) {
+		return queue, true
+	}
+	tags, ok := parseMatchCodeQueue(queue)
+	if !ok {
+		return "", false
+	}
+	return canonicalMatchCodeQueue(tags.Self, tags.Peer), true
+}
+
+func parseMatchmakingTagHeaders(r *http.Request, queue string) (*matchmakingTagPair, bool) {
+	if !strings.HasPrefix(strings.ToLower(queue), matchCodeQueuePrefix) {
+		return nil, true
+	}
+	self := normalizeMatchmakingTag(r.Header.Get(antistaticMatchSelfTagHeader))
+	peer := normalizeMatchmakingTag(r.Header.Get(antistaticMatchPeerTagHeader))
+	if !validateMatchmakingTag(self) || !validateMatchmakingTag(peer) || self == peer {
+		return nil, false
+	}
+	if canonicalMatchCodeQueue(self, peer) != strings.ToLower(queue) {
+		return nil, false
+	}
+	return &matchmakingTagPair{Self: self, Peer: peer}, true
 }
 
 func matchmakingMatchID(version, queue string, first, second MatchParticipant) string {
@@ -238,16 +324,22 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 		delete(h.Matches, matchID)
 	}
 
-	for key, ticket := range h.Tickets {
+	for _, ticket := range h.Tickets {
 		if ticket.MatchedID != "" {
 			if _, ok := h.Matches[ticket.MatchedID]; !ok {
-				delete(h.Tickets, key)
+				h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
 			}
 			continue
 		}
 
 		if !ticket.waiting(now) {
 			h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
+		}
+	}
+
+	for key, lease := range h.TagLeases {
+		if now.After(lease.CheckedIn.Add(matchmakingTicketTimeout)) {
+			delete(h.TagLeases, key)
 		}
 	}
 }
@@ -293,7 +385,53 @@ func (h *lobbyHandler) matchmakingTicketResponseLocked(status string, ticket *Ma
 	}
 }
 
-func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, character, token string, localIPs []string, localEndpoints []Endpoint, now time.Time) (*matchmakingResponse, int) {
+func (h *lobbyHandler) reserveMatchmakingTagLocked(version, tag, token, ticketKey string, now time.Time) int {
+	if tag == "" {
+		return http.StatusOK
+	}
+	leaseKey := matchmakingTagLeaseKey(version, tag)
+	if existing := h.TagLeases[leaseKey]; existing != nil {
+		if existing.Token != token && now.Before(existing.CheckedIn.Add(matchmakingTicketTimeout)) {
+			return http.StatusConflict
+		}
+	}
+	if h.TagLeases[leaseKey] == nil && len(h.TagLeases) >= maxMatchmakingTagLeases {
+		return http.StatusServiceUnavailable
+	}
+	h.TagLeases[leaseKey] = &MatchmakingTagLease{
+		Version:   version,
+		Tag:       tag,
+		Token:     token,
+		TicketKey: ticketKey,
+		CheckedIn: now,
+	}
+	return http.StatusOK
+}
+
+func (h *lobbyHandler) refreshMatchmakingTagLeaseLocked(ticket *MatchmakingTicket, now time.Time) int {
+	if ticket.SelfTag == "" {
+		return http.StatusOK
+	}
+	return h.reserveMatchmakingTagLocked(
+		ticket.Version,
+		ticket.SelfTag,
+		ticket.Token,
+		matchmakingTicketKey(ticket.Version, ticket.Queue, ticket.ID),
+		now,
+	)
+}
+
+func (h *lobbyHandler) releaseMatchmakingTagLeaseLocked(ticket *MatchmakingTicket) {
+	if ticket.SelfTag == "" {
+		return
+	}
+	leaseKey := matchmakingTagLeaseKey(ticket.Version, ticket.SelfTag)
+	if lease := h.TagLeases[leaseKey]; lease != nil && lease.Token == ticket.Token {
+		delete(h.TagLeases, leaseKey)
+	}
+}
+
+func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, character, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if existing, ok := h.Tickets[key]; ok {
@@ -302,6 +440,12 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		}
 		if existing.Character != character {
 			return h.matchmakingTicketResponseLocked("conflict", existing, now), http.StatusConflict
+		}
+		if tags != nil && (existing.SelfTag != tags.Self || existing.PeerTag != tags.Peer) {
+			return h.matchmakingTicketResponseLocked("conflict", existing, now), http.StatusConflict
+		}
+		if status := h.refreshMatchmakingTagLeaseLocked(existing, now); status != http.StatusOK {
+			return nil, status
 		}
 
 		existing.mergeEndpoint(ip, port)
@@ -342,6 +486,11 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	if err != nil {
 		return nil, http.StatusInternalServerError
 	}
+	if tags != nil {
+		if status := h.reserveMatchmakingTagLocked(version, tags.Self, ticketToken, key, now); status != http.StatusOK {
+			return nil, status
+		}
+	}
 
 	ticket := &MatchmakingTicket{
 		ID:             ticketID,
@@ -349,11 +498,17 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		Queue:          queue,
 		Endpoints:      []Endpoint{{IP: ip, Port: port}},
 		Token:          ticketToken,
+		SelfTag:        "",
+		PeerTag:        "",
 		Character:      character,
 		LocalIPs:       localIPs,
 		LocalEndpoints: localEndpoints,
 		CreatedAt:      now,
 		CheckedIn:      now,
+	}
+	if tags != nil {
+		ticket.SelfTag = tags.Self
+		ticket.PeerTag = tags.Peer
 	}
 
 	match, other := h.findCompatibleMatchLocked(ticket, now)
@@ -381,6 +536,9 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 			continue
 		}
 		if ticket.sharesEndpoint(other) {
+			continue
+		}
+		if !ticket.tagMatches(other) {
 			continue
 		}
 
@@ -430,6 +588,8 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	second.CheckedIn = match.CreatedAt
 	h.removeWaitingTicketLocked(first)
 	h.removeWaitingTicketLocked(second)
+	h.releaseMatchmakingTagLeaseLocked(first)
+	h.releaseMatchmakingTagLeaseLocked(second)
 	h.recordMatchmakingQueueWaitLocked(match, first, second)
 	h.Matches[match.ID] = match
 	h.Metrics.recordSuccessfulGame()
@@ -511,6 +671,9 @@ func (h *lobbyHandler) ensureMatchmakingIndexesLocked() {
 	if h.Queues == nil {
 		h.Queues = make(map[string]*MatchmakingQueue)
 	}
+	if h.TagLeases == nil {
+		h.TagLeases = make(map[string]*MatchmakingTagLease)
+	}
 }
 
 func maxInt64(a, b int64) int64 {
@@ -547,6 +710,7 @@ func (h *lobbyHandler) deleteTicketLocked(version, queue, ticketID string) {
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if ticket, ok := h.Tickets[key]; ok {
 		h.removeWaitingTicketLocked(ticket)
+		h.releaseMatchmakingTagLeaseLocked(ticket)
 	}
 	delete(h.Tickets, key)
 }
@@ -633,6 +797,12 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
 		return
 	}
+	normalizedQueue, ok := normalizeMatchmakingQueue(queue)
+	if !ok {
+		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
+		return
+	}
+	queue = normalizedQueue
 	if !validateMatchmakingTicket(ticket) {
 		h.respondError(w, "Invalid matchmaking ticket", http.StatusBadRequest)
 		return
@@ -643,7 +813,14 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 
 	var request matchmakingRequest
+	var tags *matchmakingTagPair
 	if r.Method == http.MethodPut {
+		var ok bool
+		tags, ok = parseMatchmakingTagHeaders(r, queue)
+		if !ok {
+			h.respondError(w, "Invalid matchmaking tag headers", http.StatusBadRequest)
+			return
+		}
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&request); err != nil {
@@ -669,7 +846,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	case http.MethodGet:
 		resp, status = h.matchmakingStateLocked(version, queue, ticket, token, now)
 	case http.MethodPut:
-		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Character, token, request.LocalIPs, request.LocalEndpoints, now)
+		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Character, token, tags, request.LocalIPs, request.LocalEndpoints, now)
 	case http.MethodDelete:
 		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token)
 	default:
@@ -708,6 +885,10 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		}
 		if status == http.StatusForbidden {
 			h.respondError(w, "Invalid matchmaking ticket token", status)
+			return
+		}
+		if status == http.StatusConflict {
+			h.respondError(w, "Matchmaking tag is already in use", status)
 			return
 		}
 		h.respondError(w, "Internal error", http.StatusInternalServerError)

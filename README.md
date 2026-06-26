@@ -6,6 +6,7 @@ Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 ## Features
 - IPv4 and IPv6 support
 - Keyed lobby and random matchmaking endpoints
+- Match-by-code tag leases for private quick matches
 - Structured JSON logging with `log/slog`
 - Configurable HTTP timeouts
 - Automatic TLS with Let's Encrypt or custom certificates
@@ -57,6 +58,7 @@ To keep memory and CPU bounded under abusive traffic, the server enforces fixed 
 | Members per lobby | 128 |
 | Matchmaking tickets | 20,000 |
 | Active matchmaking matches | 10,000 |
+| Match-by-code tag leases | 20,000 |
 
 When a capacity limit is reached, new state-creating requests return `503 Service Unavailable`; existing tickets and lobby members can continue to refresh until they expire or are deleted.
 
@@ -117,6 +119,7 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
   "lobby_count": 3,
   "ticket_count": 2,
   "match_count": 1,
+  "tag_lease_count": 1,
   "lobbies_created": 12,
   "successful_games_estimate": 8,
   "error_count": 1,
@@ -162,6 +165,15 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
 ```
 
 `local_ips` is optional for matchmaking too. Entries are sanitized to private-scope addresses and only reflected to matched peers seen from the same public IP, allowing same-NAT or same-host clients to try LAN/loopback tunnel candidates without exposing LAN addresses to unrelated WAN peers.
+
+For Match by Code queues (`code.<tag>-<tag>`), clients also send:
+
+| Header | Description |
+|--------|-------------|
+| `X-Antistatic-Match-Self-Tag` | The caller's normalized uppercase code |
+| `X-Antistatic-Match-Peer-Tag` | The peer code the caller is searching for |
+
+The server validates that those two tags derive the requested `code.*` queue, leases the self tag to the returned matchmaking token while the ticket is waiting, and only matches reciprocal claims (`A -> B` with `B -> A`). Code queue matching is case-insensitive; the canonical stored queue uses lowercase tags.
 
 ### Matchmaking Queue Measurements
 Waiting, matched, and canceled matchmaking responses include aggregate `queue` measurements for the same game version and queue:

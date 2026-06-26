@@ -11,11 +11,12 @@ import (
 
 func newTestLobbyHandler() *lobbyHandler {
 	return &lobbyHandler{
-		Lobbies: map[string]*Lobby{},
-		Tickets: map[string]*MatchmakingTicket{},
-		Waiting: map[string]map[string]*MatchmakingTicket{},
-		Matches: map[string]*Match{},
-		Queues:  map[string]*MatchmakingQueue{},
+		Lobbies:   map[string]*Lobby{},
+		Tickets:   map[string]*MatchmakingTicket{},
+		Waiting:   map[string]map[string]*MatchmakingTicket{},
+		Matches:   map[string]*Match{},
+		Queues:    map[string]*MatchmakingQueue{},
+		TagLeases: map[string]*MatchmakingTagLease{},
 	}
 }
 
