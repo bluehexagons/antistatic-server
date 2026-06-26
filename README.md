@@ -59,6 +59,7 @@ To keep memory and CPU bounded under abusive traffic, the server enforces fixed 
 | Matchmaking tickets | 20,000 |
 | Active matchmaking matches | 10,000 |
 | Match-by-code tag leases | 20,000 |
+| Match-by-code tag leases per client IP | 8 |
 
 When a capacity limit is reached, new state-creating requests return `503 Service Unavailable`; existing tickets and lobby members can continue to refresh until they expire or are deleted.
 
@@ -172,8 +173,9 @@ For Match by Code queues (`code.<tag>-<tag>`), clients also send:
 |--------|-------------|
 | `X-Antistatic-Match-Self-Tag` | The caller's normalized uppercase code |
 | `X-Antistatic-Match-Peer-Tag` | The peer code the caller is searching for |
+| `X-Antistatic-Match-Self-Tag-Token` | Optional owner token from an earlier `tag_token` response |
 
-The server validates that those two tags derive the requested `code.*` queue, leases the self tag to the returned matchmaking token while the ticket is waiting, and only matches reciprocal claims (`A -> B` with `B -> A`). Code queue matching is case-insensitive; the canonical stored queue uses lowercase tags.
+The server validates that those two tags derive the requested `code.*` queue, leases the self tag to one owner token for 1 hour, returns that owner token as `tag_token`, and only matches reciprocal claims (`A -> B` with `B -> A`). Code queue matching is case-insensitive; the canonical stored queue uses lowercase tags. A client refreshes the lease by sending the returned owner token when it searches again. To limit abuse, a single client IP can hold at most 8 active match-code leases at a time.
 
 ### Matchmaking Queue Measurements
 Waiting, matched, and canceled matchmaking responses include aggregate `queue` measurements for the same game version and queue:

@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,10 +17,10 @@ func serveMatchmakingRequest(h *lobbyHandler, method, target, remoteAddr string,
 }
 
 func serveMatchmakingRequestWithToken(h *lobbyHandler, method, target, remoteAddr string, body any, token string) *httptest.ResponseRecorder {
-	return serveMatchmakingRequestWithTokenAndTags(h, method, target, remoteAddr, body, token, "", "")
+	return serveMatchmakingRequestWithTokenAndTags(h, method, target, remoteAddr, body, token, "", "", "")
 }
 
-func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, remoteAddr string, body any, token, selfTag, peerTag string) *httptest.ResponseRecorder {
+func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, remoteAddr string, body any, token, selfTag, peerTag, tagToken string) *httptest.ResponseRecorder {
 	var reader *bytes.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -40,6 +42,9 @@ func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, re
 	}
 	if peerTag != "" {
 		req.Header.Set(antistaticMatchPeerTagHeader, peerTag)
+	}
+	if tagToken != "" {
+		req.Header.Set(antistaticMatchSelfTagTokenHeader, tagToken)
 	}
 	rec := httptest.NewRecorder()
 
@@ -252,6 +257,7 @@ func TestMatchmakingCodeQueueRequiresValidTagHeaders(t *testing.T) {
 		"",
 		"ALPHA1",
 		"BRAVO2",
+		"",
 	)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("mismatched tag headers returned %d, want %d", rec.Code, http.StatusBadRequest)
@@ -266,6 +272,7 @@ func TestMatchmakingCodeQueueRequiresValidTagHeaders(t *testing.T) {
 		"",
 		"ALPHA1",
 		"ALPHA1",
+		"",
 	)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("same self/peer tag headers returned %d, want %d", rec.Code, http.StatusBadRequest)
@@ -284,13 +291,14 @@ func TestMatchmakingCodeQueueLeasesTagsAndMatchesReciprocalSearch(t *testing.T) 
 		"",
 		"alpha1",
 		"bravo2",
+		"",
 	)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first code PUT returned %d: %s", first.Code, first.Body.String())
 	}
 	firstResp := decodeMatchmakingResponse(t, first)
-	if firstResp.Status != "waiting" || firstResp.Token == "" {
-		t.Fatalf("first code response = %#v, want waiting with token", firstResp)
+	if firstResp.Status != "waiting" || firstResp.Token == "" || firstResp.TagToken == "" {
+		t.Fatalf("first code response = %#v, want waiting with ticket and tag tokens", firstResp)
 	}
 
 	h.Mu.RLock()
@@ -310,6 +318,7 @@ func TestMatchmakingCodeQueueLeasesTagsAndMatchesReciprocalSearch(t *testing.T) 
 		"",
 		"BRAVO2",
 		"ALPHA1",
+		"",
 	)
 	if second.Code != http.StatusOK {
 		t.Fatalf("second code PUT returned %d: %s", second.Code, second.Body.String())
@@ -324,8 +333,8 @@ func TestMatchmakingCodeQueueLeasesTagsAndMatchesReciprocalSearch(t *testing.T) 
 
 	h.Mu.RLock()
 	defer h.Mu.RUnlock()
-	if len(h.TagLeases) != 0 {
-		t.Fatalf("tag leases = %d after match, want released", len(h.TagLeases))
+	if len(h.TagLeases) != 2 {
+		t.Fatalf("tag leases = %d after match, want both player codes leased", len(h.TagLeases))
 	}
 }
 
@@ -341,6 +350,7 @@ func TestMatchmakingCodeTagLeaseRejectsDifferentToken(t *testing.T) {
 		"",
 		"ALPHA1",
 		"BRAVO2",
+		"",
 	)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first code PUT returned %d: %s", first.Code, first.Body.String())
@@ -355,6 +365,7 @@ func TestMatchmakingCodeTagLeaseRejectsDifferentToken(t *testing.T) {
 		"",
 		"ALPHA1",
 		"BRAVO2",
+		"",
 	)
 	if conflict.Code != http.StatusConflict {
 		t.Fatalf("duplicate self tag returned %d, want %d", conflict.Code, http.StatusConflict)
@@ -367,7 +378,7 @@ func TestMatchmakingCodeTagLeaseRejectsDifferentToken(t *testing.T) {
 	}
 }
 
-func TestMatchmakingCodeTagLeaseReleasedOnDelete(t *testing.T) {
+func TestMatchmakingCodeTagLeasePersistsAfterDeleteForSameToken(t *testing.T) {
 	h := newTestLobbyHandler()
 
 	first := serveMatchmakingRequestWithTokenAndTags(
@@ -379,15 +390,36 @@ func TestMatchmakingCodeTagLeaseReleasedOnDelete(t *testing.T) {
 		"",
 		"ALPHA1",
 		"BRAVO2",
+		"",
 	)
 	if first.Code != http.StatusOK {
 		t.Fatalf("first code PUT returned %d: %s", first.Code, first.Body.String())
 	}
-	token := decodeMatchmakingResponse(t, first).Token
+	firstResp := decodeMatchmakingResponse(t, first)
+	token := firstResp.Token
+	tagToken := firstResp.TagToken
+	if tagToken == "" {
+		t.Fatalf("first response tag token was empty")
+	}
 
 	deleted := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860", "198.51.100.10:32000", nil, token)
 	if deleted.Code != http.StatusOK {
 		t.Fatalf("delete returned %d, want %d: %s", deleted.Code, http.StatusOK, deleted.Body.String())
+	}
+
+	conflict := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
+		"198.51.100.20:32000",
+		matchmakingRequest{Character: "Silicon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+		"",
+	)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("second lease without tag token returned %d, want %d", conflict.Code, http.StatusConflict)
 	}
 
 	second := serveMatchmakingRequestWithTokenAndTags(
@@ -399,9 +431,136 @@ func TestMatchmakingCodeTagLeaseReleasedOnDelete(t *testing.T) {
 		"",
 		"ALPHA1",
 		"BRAVO2",
+		tagToken,
 	)
 	if second.Code != http.StatusOK {
-		t.Fatalf("second lease after delete returned %d, want %d: %s", second.Code, http.StatusOK, second.Body.String())
+		t.Fatalf("second lease with tag token returned %d, want %d: %s", second.Code, http.StatusOK, second.Body.String())
+	}
+}
+
+func TestMatchmakingCodeTagLeaseExpiresAfterTimeout(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+		"",
+	)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first code PUT returned %d: %s", first.Code, first.Body.String())
+	}
+
+	h.Mu.Lock()
+	for _, lease := range h.TagLeases {
+		lease.CheckedIn = time.Now().Add(-matchmakingTagLeaseTimeout - time.Second)
+	}
+	h.Mu.Unlock()
+
+	second := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
+		"198.51.100.20:32000",
+		matchmakingRequest{Character: "Silicon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+		"",
+	)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second lease after expiry returned %d, want %d: %s", second.Code, http.StatusOK, second.Body.String())
+	}
+}
+
+func TestMatchmakingCodeTagLeaseRefreshExtendsExpiry(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+		"",
+	)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first code PUT returned %d: %s", first.Code, first.Body.String())
+	}
+	firstResp := decodeMatchmakingResponse(t, first)
+
+	h.Mu.Lock()
+	lease := h.TagLeases[matchmakingTagLeaseKey("0.9.5", "ALPHA1")]
+	lease.CheckedIn = time.Now().Add(-matchmakingTagLeaseTimeout / 2)
+	before := lease.CheckedIn
+	h.Mu.Unlock()
+
+	refresh := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		firstResp.Token,
+		"ALPHA1",
+		"BRAVO2",
+		firstResp.TagToken,
+	)
+	if refresh.Code != http.StatusOK {
+		t.Fatalf("refresh returned %d, want %d: %s", refresh.Code, http.StatusOK, refresh.Body.String())
+	}
+
+	h.Mu.RLock()
+	after := h.TagLeases[matchmakingTagLeaseKey("0.9.5", "ALPHA1")].CheckedIn
+	h.Mu.RUnlock()
+	if !after.After(before) {
+		t.Fatalf("lease CheckedIn did not refresh: before=%v after=%v", before, after)
+	}
+}
+
+func TestMatchmakingCodeTagLeaseCapsLeasesPerIP(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	for i := 0; i < maxMatchmakingTagLeasesPerIP; i++ {
+		selfTag := fmt.Sprintf("A%03d", i)
+		peerTag := fmt.Sprintf("Z%03d", i)
+		rec := serveMatchmakingRequestWithTokenAndTags(
+			h,
+			http.MethodPut,
+			fmt.Sprintf("/0.9.5/matchmaking/code.%s-%s/Ticket%d/45860", strings.ToLower(selfTag), strings.ToLower(peerTag), i),
+			"198.51.100.10:32000",
+			matchmakingRequest{Character: "Carbon"},
+			"",
+			selfTag,
+			peerTag,
+			"",
+		)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("lease %d returned %d, want %d: %s", i, rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	rec := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.a999-z999/Ticket9/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		"",
+		"A999",
+		"Z999",
+		"",
+	)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("extra lease returned %d, want %d", rec.Code, http.StatusTooManyRequests)
 	}
 }
 
