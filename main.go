@@ -127,11 +127,15 @@ func main() {
 	var servers []*http.Server
 
 	if autocertDomain != "" {
-		ln, err := net.Listen("tcp", ":443")
+		acmeTlsPort := tlsPort
+		if acmeTlsPort <= 0 {
+			acmeTlsPort = 443
+		}
+		ln, err := net.Listen("tcp", ":"+strconv.Itoa(acmeTlsPort))
 		if err != nil {
 			slog.Error("Failed to listen for autocert", "error", err)
 		} else {
-			slog.Info("HTTPS autocert listening", "domain", autocertDomain, "cache", autocertCacheDir)
+			slog.Info("HTTPS autocert listening", "addr", ":"+strconv.Itoa(acmeTlsPort), "domain", autocertDomain, "cache", autocertCacheDir)
 			tlsConfig := mgr.TLSConfig()
 			tlsConfig.MinVersion = tls.VersionTLS12
 			tlsLn := tls.NewListener(ln, tlsConfig)
@@ -152,6 +156,27 @@ func main() {
 				}
 			}()
 		}
+	}
+
+	if autocertDomain != "" && noHTTP {
+		slog.Info("ACME challenge HTTP server listening", "port", 80, "domain", autocertDomain)
+		acmeSrv := &http.Server{
+			Addr:              ":80",
+			Handler:           mgr.HTTPHandler(nil),
+			ReadTimeout:       readTimeout,
+			WriteTimeout:      writeTimeout,
+			IdleTimeout:       idleTimeout,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		servers = append(servers, acmeSrv)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := acmeSrv.ListenAndServe()
+			if err != nil && err != http.ErrServerClosed {
+				slog.Error("ACME HTTP server error", "error", err)
+			}
+		}()
 	}
 
 	if !noHTTP {
