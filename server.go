@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,10 @@ const maxPathLength = 512
 const maxLobbies = 10000
 
 const recentErrorCap = 20
+
+func lobbyStorageKey(version, key string) string {
+	return version + "|" + key
+}
 
 var serverVersion = resolveServerVersion()
 var serverStartTime = time.Now()
@@ -313,6 +318,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "key", key, "version", version)
 		token := r.Header.Get(antistaticTokenHeader)
+		storageKey := lobbyStorageKey(version, key)
 
 		var checkInData lobbyCheckInData
 		if r.Method == "PUT" {
@@ -325,7 +331,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		h.Mu.Lock()
-		l, ok := h.Lobbies[key]
+		l, ok := h.Lobbies[storageKey]
 		if !ok {
 			if r.Method == "DELETE" {
 				h.Mu.Unlock()
@@ -341,7 +347,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			l = &Lobby{Key: key, Version: version}
 
 			if r.Method == "PUT" {
-				h.Lobbies[key] = l
+				h.Lobbies[storageKey] = l
 				h.Metrics.recordLobbyCreated()
 				slog.Info("Created lobby", "requestID", getRequestID(r), "key", key, "version", version)
 			}
@@ -377,7 +383,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if len(l.Members) == 0 {
-				delete(h.Lobbies, key)
+				delete(h.Lobbies, storageKey)
 				slog.Info("Lobby emptied", "key", key)
 			}
 		}
@@ -464,6 +470,9 @@ func parseLobbyCheckInBody(r *http.Request) (lobbyCheckInData, error) {
 			return lobbyCheckInData{}, nil
 		}
 		return lobbyCheckInData{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return lobbyCheckInData{}, errors.New("lobby request body contained trailing JSON")
 	}
 	localIPs := sanitizeLocalIPs(body.LocalIPs)
 	return lobbyCheckInData{

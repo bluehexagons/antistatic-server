@@ -23,9 +23,13 @@ func serveMatchmakingRequestWithToken(h *lobbyHandler, method, target, remoteAdd
 func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, remoteAddr string, body any, token, selfTag, peerTag, tagToken string) *httptest.ResponseRecorder {
 	var reader *bytes.Reader
 	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			panic(err)
+		data, ok := body.(json.RawMessage)
+		if !ok {
+			var err error
+			data, err = json.Marshal(body)
+			if err != nil {
+				panic(err)
+			}
 		}
 		reader = bytes.NewReader(data)
 	} else {
@@ -611,6 +615,53 @@ func TestMatchmakingPutLongPollWakesOnMatch(t *testing.T) {
 	}
 }
 
+func TestMatchmakingPutLongPollBroadcastsMatchToConcurrentWaiters(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial PUT returned %d: %s", first.Code, first.Body.String())
+	}
+	tokenA := decodeMatchmakingResponse(t, first).Token
+
+	const waiterCount = 32
+	done := make(chan *httptest.ResponseRecorder, waiterCount)
+	for range waiterCount {
+		go func() {
+			done <- serveMatchmakingRequestWithToken(
+				h,
+				http.MethodPut,
+				"/0.9.5/matchmaking/default/TicketA/45860?wait=2",
+				"198.51.100.10:32000",
+				matchmakingRequest{Character: "Carbon"},
+				tokenA,
+			)
+		}()
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Character: "Silicon"})
+	if second.Code != http.StatusOK {
+		t.Fatalf("second PUT returned %d: %s", second.Code, second.Body.String())
+	}
+
+	deadline := time.After(time.Second)
+	for i := range waiterCount {
+		select {
+		case rec := <-done:
+			if rec.Code != http.StatusOK {
+				t.Fatalf("waiter %d returned %d: %s", i, rec.Code, rec.Body.String())
+			}
+			resp := decodeMatchmakingResponse(t, rec)
+			if resp.Status != "matched" || resp.Match == nil {
+				t.Fatalf("waiter %d response = %#v, want matched", i, resp)
+			}
+		case <-deadline:
+			t.Fatalf("only %d/%d concurrent waiters received the match within 1s", i, waiterCount)
+		}
+	}
+}
+
 func TestMatchmakingPutLongPollTimesOut(t *testing.T) {
 	h := newTestLobbyHandler()
 
@@ -825,5 +876,10 @@ func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 	}
 	if got := h.Metrics.clientErrors.Load(); got == 0 {
 		t.Fatalf("client error counter = %d, want > 0", got)
+	}
+
+	rec = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", json.RawMessage(`{"character":"Carbon"} {}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("trailing JSON status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }

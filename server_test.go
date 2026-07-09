@@ -131,6 +131,28 @@ func TestLegacyLobbyRoute(t *testing.T) {
 	}
 }
 
+func TestLobbyCodeIsIsolatedByVersion(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	first := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
+	second := serveLobbyRequest(h, http.MethodPut, "/0.9.6/lobby/ABC123/45861", "198.51.100.20:32001")
+	legacy := serveLobbyRequest(h, http.MethodPut, "/lobby/ABC123/45862", "198.51.100.30:32002")
+
+	for label, rec := range map[string]*httptest.ResponseRecorder{"first": first, "second": second, "legacy": legacy} {
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s PUT returned status %d: %s", label, rec.Code, rec.Body.String())
+		}
+		response := decodeLobbyResponse(t, rec)
+		if len(response.Lobby.Members) != 1 {
+			t.Fatalf("%s lobby members = %#v, want one version-local member", label, response.Lobby.Members)
+		}
+	}
+
+	if got := len(h.Lobbies); got != 3 {
+		t.Fatalf("stored lobbies = %d, want one per route version", got)
+	}
+}
+
 func TestLobbyRejectsUnexpectedPathSegments(t *testing.T) {
 	h := newTestLobbyHandler()
 	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860/extra", "198.51.100.10:32000")
@@ -281,7 +303,7 @@ func TestLobbyDeleteRequiresMemberToken(t *testing.T) {
 	}
 
 	h.Mu.RLock()
-	if len(h.Lobbies["ABC123"].Members) != 1 {
+	if len(h.Lobbies[lobbyStorageKey("0.9.5", "ABC123")].Members) != 1 {
 		t.Fatalf("member was removed by wrong-token delete")
 	}
 	h.Mu.RUnlock()
@@ -291,7 +313,7 @@ func TestLobbyDeleteRequiresMemberToken(t *testing.T) {
 		t.Fatalf("DELETE with token status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	h.Mu.RLock()
-	_, ok := h.Lobbies["ABC123"]
+	_, ok := h.Lobbies[lobbyStorageKey("0.9.5", "ABC123")]
 	h.Mu.RUnlock()
 	if ok {
 		t.Fatalf("lobby remained after authorized delete")
@@ -392,6 +414,11 @@ func TestLobbyRejectsMalformedCheckInBody(t *testing.T) {
 	rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "", `{"local_ips":`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "", `{} {}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("trailing JSON status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 

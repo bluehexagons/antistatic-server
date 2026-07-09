@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,14 +24,10 @@ const antistaticMatchSelfTagHeader = "X-Antistatic-Match-Self-Tag"
 const antistaticMatchPeerTagHeader = "X-Antistatic-Match-Peer-Tag"
 const antistaticMatchSelfTagTokenHeader = "X-Antistatic-Match-Self-Tag-Token"
 
-// Long-poll bounds for PUT requests that opt in via the ?wait= query
+// Long-poll bound for PUT requests that opt in via the ?wait= query
 // parameter. Clients use this to learn of a match without burning the
-// full client-side polling interval. The interval governs how often we
-// re-check ticket state under the lock; keep it short enough to overlap
-// peer probes but long enough that idle long-polls don't busy-loop the
-// global lock.
+// full client-side polling interval.
 const maxMatchmakingLongPoll = 10 * time.Second
-const matchmakingLongPollCheckInterval = 100 * time.Millisecond
 
 type MatchmakingTicket struct {
 	ID             string     `json:"id"`
@@ -47,6 +44,8 @@ type MatchmakingTicket struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	CheckedIn      time.Time  `json:"checked_in"`
 	MatchedID      string     `json:"matched_id"`
+	stateChanged   chan struct{}
+	changeNotified bool
 }
 
 type MatchmakingTagLease struct {
@@ -111,6 +110,18 @@ func (t *MatchmakingTicket) tagMatches(other *MatchmakingTicket) bool {
 		return true
 	}
 	return t.SelfTag != "" && t.PeerTag != "" && t.SelfTag == other.PeerTag && t.PeerTag == other.SelfTag
+}
+
+// notifyStateChangedLocked broadcasts a terminal state transition to every
+// long-poll request waiting on this ticket. The handler lock must be held.
+func (t *MatchmakingTicket) notifyStateChangedLocked() {
+	if t.changeNotified {
+		return
+	}
+	t.changeNotified = true
+	if t.stateChanged != nil {
+		close(t.stateChanged)
+	}
 }
 
 type MatchParticipant struct {
@@ -427,8 +438,7 @@ func (h *lobbyHandler) reserveMatchmakingTagLocked(version, tag, token, ticketKe
 		}
 		if existing.TicketKey != "" && existing.TicketKey != ticketKey {
 			if oldTicket := h.Tickets[existing.TicketKey]; oldTicket != nil && oldTicket.MatchedID == "" {
-				h.removeWaitingTicketLocked(oldTicket)
-				delete(h.Tickets, existing.TicketKey)
+				h.deleteTicketLocked(oldTicket.Version, oldTicket.Queue, oldTicket.ID)
 			}
 		}
 		existing.TicketKey = ticketKey
@@ -552,6 +562,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		LocalEndpoints: localEndpoints,
 		CreatedAt:      now,
 		CheckedIn:      now,
+		stateChanged:   make(chan struct{}),
 	}
 	if tags != nil {
 		ticket.TagToken = tags.SelfToken
@@ -638,6 +649,8 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	h.removeWaitingTicketLocked(second)
 	h.recordMatchmakingQueueWaitLocked(match, first, second)
 	h.Matches[match.ID] = match
+	first.notifyStateChangedLocked()
+	second.notifyStateChangedLocked()
 	h.Metrics.recordSuccessfulGame()
 }
 
@@ -756,6 +769,7 @@ func (h *lobbyHandler) deleteTicketLocked(version, queue, ticketID string) {
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if ticket, ok := h.Tickets[key]; ok {
 		h.removeWaitingTicketLocked(ticket)
+		ticket.notifyStateChangedLocked()
 	}
 	delete(h.Tickets, key)
 }
@@ -779,13 +793,11 @@ func parseLongPollWait(r *http.Request) time.Duration {
 	return wait
 }
 
-// waitForMatchmakingResult polls the matchmaking state at a short interval
-// until either the ticket becomes matched, the deadline elapses, or the
-// client disconnects. The caller's existing (resp, status) is the fallback
-// returned when no match is observed before the deadline. The poll
-// re-acquires the global lock on each tick; the interval is short enough
-// for snappy match-notification but long enough to keep lock churn
-// bounded under load.
+// waitForMatchmakingResult waits for a ticket state notification, the
+// deadline, or client disconnect. It rechecks state while holding the lock
+// before and after the wait so a match cannot be lost to a notification race.
+// The caller's existing (resp, status) is returned when the ticket is removed
+// or no match is observed before the deadline.
 func (h *lobbyHandler) waitForMatchmakingResult(
 	ctx context.Context,
 	version, queue, ticketID, token string,
@@ -793,44 +805,37 @@ func (h *lobbyHandler) waitForMatchmakingResult(
 	fallbackResp *matchmakingResponse,
 	fallbackStatus int,
 ) (*matchmakingResponse, int) {
-	deadline := time.Now().Add(wait)
-	timer := time.NewTimer(0)
-	defer timer.Stop()
-	if !timer.Stop() {
-		<-timer.C
+	h.Mu.Lock()
+	resp, status := h.matchmakingStateLocked(version, queue, ticketID, token, time.Now())
+	var stateChanged <-chan struct{}
+	if resp != nil && resp.Match == nil {
+		if ticket := h.Tickets[matchmakingTicketKey(version, queue, ticketID)]; ticket != nil {
+			stateChanged = ticket.stateChanged
+		}
 	}
-	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return fallbackResp, fallbackStatus
-		}
-		interval := matchmakingLongPollCheckInterval
-		if interval > remaining {
-			interval = remaining
-		}
-		timer.Reset(interval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return fallbackResp, fallbackStatus
-		case <-timer.C:
-		}
+	h.Mu.Unlock()
+	if resp != nil && resp.Match != nil {
+		return resp, status
+	}
+	if stateChanged == nil {
+		return fallbackResp, fallbackStatus
+	}
 
-		h.Mu.Lock()
-		resp, status := h.matchmakingStateLocked(version, queue, ticketID, token, time.Now())
-		h.Mu.Unlock()
-		// If the ticket disappeared (timed out, canceled, server cleanup),
-		// return the original fallback rather than surfacing a confusing
-		// 404 to a client that just successfully PUT.
-		if resp == nil {
-			continue
-		}
-		if resp.Match != nil {
-			return resp, status
-		}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	case <-stateChanged:
 	}
+
+	h.Mu.Lock()
+	resp, status = h.matchmakingStateLocked(version, queue, ticketID, token, time.Now())
+	h.Mu.Unlock()
+	if resp != nil && resp.Match != nil {
+		return resp, status
+	}
+	return fallbackResp, fallbackStatus
 }
 
 func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, ip, version, queue, ticket string, port int) {
@@ -869,6 +874,10 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&request); err != nil {
+			h.respondError(w, "Invalid matchmaking request", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
 			h.respondError(w, "Invalid matchmaking request", http.StatusBadRequest)
 			return
 		}
