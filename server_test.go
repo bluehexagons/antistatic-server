@@ -78,11 +78,11 @@ func decodeHealthResponse(t *testing.T, rec *httptest.ResponseRecorder) healthRe
 func TestHealthReportsStartupMetrics(t *testing.T) {
 	h := newTestLobbyHandler()
 	h.Metrics.recordLobbyCreated()
-	h.Metrics.recordSuccessfulGame()
+	h.Metrics.recordSuccessfulMatch()
 	h.Metrics.recordError("test error", http.StatusInternalServerError)
 
 	resp := h.healthResponse()
-	if resp.Status != "ok" || resp.LobbiesCreated != 1 || resp.SuccessfulGamesEstimate != 1 || resp.ServerErrorCount != 1 {
+	if resp.Status != "ok" || resp.LobbiesCreated != 1 || resp.SuccessfulMatches != 1 || resp.ServerErrorCount != 1 {
 		t.Fatalf("health response = %#v, want counters to be reported", resp)
 	}
 }
@@ -327,7 +327,7 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	handler.Matches["match-1"] = &Match{}
 	handler.Mu.Unlock()
 	handler.Metrics.recordLobbyCreated()
-	handler.Metrics.recordSuccessfulGame()
+	handler.Metrics.recordSuccessfulMatch()
 	handler.Metrics.recordError("test error", http.StatusBadRequest)
 
 	rec := httptest.NewRecorder()
@@ -339,7 +339,7 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	}
 
 	resp := decodeHealthResponse(t, rec)
-	if resp.LobbyCount != 1 || resp.MatchCount != 1 || resp.LobbiesCreated != 1 || resp.SuccessfulGamesEstimate != 1 || resp.ClientErrorCount != 1 {
+	if resp.LobbyCount != 1 || resp.MatchCount != 1 || resp.LobbiesCreated != 1 || resp.SuccessfulMatches != 1 || resp.ClientErrorCount != 1 {
 		t.Fatalf("health payload = %#v, want counters", resp)
 	}
 	if resp.Version != serverVersion {

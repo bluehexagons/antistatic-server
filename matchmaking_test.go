@@ -92,8 +92,8 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	if len(h.Tickets) != 1 || len(h.Matches) != 0 {
 		t.Fatalf("handler maps = tickets:%d matches:%d, want 1/0", len(h.Tickets), len(h.Matches))
 	}
-	if got := h.Metrics.successfulGames.Load(); got != 0 {
-		t.Fatalf("successful games = %d, want 0", got)
+	if got := h.Metrics.successfulMatches.Load(); got != 0 {
+		t.Fatalf("successful matches = %d, want 0", got)
 	}
 }
 
@@ -233,8 +233,8 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 	if len(h.Matches) != 1 {
 		t.Fatalf("match count = %d, want 1", len(h.Matches))
 	}
-	if got := h.Metrics.successfulGames.Load(); got != 1 {
-		t.Fatalf("successful games = %d, want 1", got)
+	if got := h.Metrics.successfulMatches.Load(); got != 1 {
+		t.Fatalf("successful matches = %d, want 1", got)
 	}
 	for _, ticket := range h.Tickets {
 		if ticket.MatchedID == "" {
@@ -612,6 +612,54 @@ func TestMatchmakingPutLongPollWakesOnMatch(t *testing.T) {
 	}
 	if resp.Match.MatchedAtMs == 0 {
 		t.Fatalf("MatchedAtMs was not populated in match response: %#v", resp.Match)
+	}
+}
+
+func TestMatchmakingInitialPutLongPollWakesOnMatch(t *testing.T) {
+	h := newTestLobbyHandler()
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- serveMatchmakingRequest(
+			h,
+			http.MethodPut,
+			"/0.9.5/matchmaking/default/TicketA/45860?wait=2",
+			"198.51.100.10:32000",
+			matchmakingRequest{Character: "Carbon"},
+		)
+	}()
+
+	ticketKey := matchmakingTicketKey("0.9.5", "default", "TicketA")
+	deadline := time.Now().Add(time.Second)
+	for {
+		h.Mu.RLock()
+		_, waiting := h.Tickets[ticketKey]
+		h.Mu.RUnlock()
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("initial PUT did not register its ticket within 1s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Character: "Silicon"})
+	if second.Code != http.StatusOK {
+		t.Fatalf("second PUT returned %d: %s", second.Code, second.Body.String())
+	}
+
+	select {
+	case rec := <-done:
+		if rec.Code != http.StatusOK {
+			t.Fatalf("initial long-poll PUT returned %d: %s", rec.Code, rec.Body.String())
+		}
+		resp := decodeMatchmakingResponse(t, rec)
+		if resp.Status != "matched" || resp.Match == nil || resp.Token == "" {
+			t.Fatalf("initial long-poll response = %#v, want matched response with token", resp)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial long-poll PUT did not wake within 1s of the match")
 	}
 }
 

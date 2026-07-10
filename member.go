@@ -57,20 +57,6 @@ const maxLocalIPLength = 64
 // design needs to change.
 const maxEndpointsPerMember = 4
 
-func (m *Member) Stale() bool {
-	now := time.Now()
-	return now.After(m.CheckedIn.Add(memberTimeout))
-}
-
-// PrimaryEndpoint returns the first checked-in endpoint, or a zero value if
-// the member has no endpoints (defensive — should not happen in practice).
-func (m *Member) PrimaryEndpoint() Endpoint {
-	if len(m.Endpoints) == 0 {
-		return Endpoint{}
-	}
-	return m.Endpoints[0]
-}
-
 // MatchesEndpoint reports whether the member already lists exactly this
 // (ip, port). Used by lobby check-in to detect duplicate keepalives.
 func (m *Member) MatchesEndpoint(ip string, port int) bool {

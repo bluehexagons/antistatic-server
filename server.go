@@ -54,10 +54,10 @@ type pathCount struct {
 }
 
 type serverMetrics struct {
-	lobbiesCreated  atomic.Int64
-	successfulGames atomic.Int64
-	clientErrors    atomic.Int64
-	serverErrors    atomic.Int64
+	lobbiesCreated    atomic.Int64
+	successfulMatches atomic.Int64
+	clientErrors      atomic.Int64
+	serverErrors      atomic.Int64
 
 	recentMu     sync.Mutex
 	recentErrors []recentError
@@ -70,8 +70,8 @@ func (m *serverMetrics) recordLobbyCreated() {
 	m.lobbiesCreated.Add(1)
 }
 
-func (m *serverMetrics) recordSuccessfulGame() {
-	m.successfulGames.Add(1)
+func (m *serverMetrics) recordSuccessfulMatch() {
+	m.successfulMatches.Add(1)
 }
 
 func (m *serverMetrics) recordError(msg string, status int) {
@@ -153,37 +153,37 @@ type lobbyHandler struct {
 }
 
 type healthResponse struct {
-	Status                  string        `json:"status"`
-	StartTime               time.Time     `json:"start_time"`
-	LobbyCount              int           `json:"lobby_count"`
-	TicketCount             int           `json:"ticket_count"`
-	MatchCount              int           `json:"match_count"`
-	TagLeaseCount           int           `json:"tag_lease_count"`
-	LobbiesCreated          int64         `json:"lobbies_created"`
-	SuccessfulGamesEstimate int64         `json:"successful_games_estimate"`
-	ClientErrorCount        int64         `json:"client_error_count"`
-	ServerErrorCount        int64         `json:"server_error_count"`
-	RecentErrors            []recentError `json:"recent_errors,omitempty"`
-	UnknownPaths            []pathCount   `json:"unknown_paths,omitempty"`
-	Version                 string        `json:"version"`
+	Status            string        `json:"status"`
+	StartTime         time.Time     `json:"start_time"`
+	LobbyCount        int           `json:"lobby_count"`
+	TicketCount       int           `json:"ticket_count"`
+	MatchCount        int           `json:"match_count"`
+	TagLeaseCount     int           `json:"tag_lease_count"`
+	LobbiesCreated    int64         `json:"lobbies_created"`
+	SuccessfulMatches int64         `json:"successful_matches"`
+	ClientErrorCount  int64         `json:"client_error_count"`
+	ServerErrorCount  int64         `json:"server_error_count"`
+	RecentErrors      []recentError `json:"recent_errors,omitempty"`
+	UnknownPaths      []pathCount   `json:"unknown_paths,omitempty"`
+	Version           string        `json:"version"`
 }
 
 func (h *lobbyHandler) healthResponse() healthResponse {
 	h.Mu.RLock()
 	resp := healthResponse{
-		Status:                  "ok",
-		StartTime:               serverStartTime,
-		LobbyCount:              len(h.Lobbies),
-		TicketCount:             len(h.Tickets),
-		MatchCount:              len(h.Matches),
-		TagLeaseCount:           len(h.TagLeases),
-		LobbiesCreated:          h.Metrics.lobbiesCreated.Load(),
-		SuccessfulGamesEstimate: h.Metrics.successfulGames.Load(),
-		ClientErrorCount:        h.Metrics.clientErrors.Load(),
-		ServerErrorCount:        h.Metrics.serverErrors.Load(),
-		RecentErrors:            h.Metrics.snapshotRecentErrors(),
-		UnknownPaths:            h.Metrics.snapshotUnknownPaths(),
-		Version:                 serverVersion,
+		Status:            "ok",
+		StartTime:         serverStartTime,
+		LobbyCount:        len(h.Lobbies),
+		TicketCount:       len(h.Tickets),
+		MatchCount:        len(h.Matches),
+		TagLeaseCount:     len(h.TagLeases),
+		LobbiesCreated:    h.Metrics.lobbiesCreated.Load(),
+		SuccessfulMatches: h.Metrics.successfulMatches.Load(),
+		ClientErrorCount:  h.Metrics.clientErrors.Load(),
+		ServerErrorCount:  h.Metrics.serverErrors.Load(),
+		RecentErrors:      h.Metrics.snapshotRecentErrors(),
+		UnknownPaths:      h.Metrics.snapshotUnknownPaths(),
+		Version:           serverVersion,
 	}
 	h.Mu.RUnlock()
 	return resp

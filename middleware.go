@@ -172,7 +172,7 @@ func (rl *rateLimiter) allow(ip string) bool {
 	now := time.Now()
 	b, exists := shard.clients[ip]
 	if !exists {
-		if len(shard.clients) >= maxRateLimitClients/rateLimiterShardCount {
+		if len(shard.clients) >= (maxRateLimitClients+rateLimiterShardCount-1)/rateLimiterShardCount {
 			return false
 		}
 		b = &bucket{

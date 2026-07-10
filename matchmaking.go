@@ -63,18 +63,6 @@ type matchmakingTagPair struct {
 	SelfToken string
 }
 
-// matchesAnyEndpoint reports whether the ticket already lists this
-// (ip, port) — used by lobby-style checks where a duplicate keepalive
-// without a token would otherwise create a second member.
-func (t *MatchmakingTicket) matchesAnyEndpoint(ip string, port int) bool {
-	for _, e := range t.Endpoints {
-		if e.IP == ip && e.Port == port {
-			return true
-		}
-	}
-	return false
-}
-
 // mergeEndpoint adds (or replaces in-family) a checked-in endpoint, capped
 // at maxEndpointsPerMember.
 func (t *MatchmakingTicket) mergeEndpoint(ip string, port int) {
@@ -620,7 +608,7 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 	secondParticipant.Role = "client"
 
 	match := &Match{
-		ID:        matchmakingMatchID(ticket.Version, ticket.Queue, first.participantForMatch(), second.participantForMatch()),
+		ID:        matchmakingMatchID(ticket.Version, ticket.Queue, firstParticipant, secondParticipant),
 		Version:   ticket.Version,
 		Queue:     ticket.Queue,
 		CreatedAt: now,
@@ -651,7 +639,7 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	h.Matches[match.ID] = match
 	first.notifyStateChangedLocked()
 	second.notifyStateChangedLocked()
-	h.Metrics.recordSuccessfulGame()
+	h.Metrics.recordSuccessfulMatch()
 }
 
 func (h *lobbyHandler) recordMatchmakingQueueWaitLocked(match *Match, first, second *MatchmakingTicket) {
@@ -910,13 +898,12 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	h.Mu.Unlock()
 
 	// Long-poll on PUT: if the ticket is still waiting and the client asked
-	// us to wait, re-check state at a short interval until a match appears,
-	// the deadline elapses, or the client disconnects. This lets clients
-	// learn of a match within ~100ms of registration instead of waiting for
-	// their next regular poll.
+	// us to wait, block until a match appears, the deadline elapses, or the
+	// client disconnects. Use the response token so a ticket's initial PUT,
+	// which has no token in the request, can wait too.
 	if r.Method == http.MethodPut && status == http.StatusOK && resp != nil && resp.Status == "waiting" {
 		if wait := parseLongPollWait(r); wait > 0 {
-			resp, status = h.waitForMatchmakingResult(r.Context(), version, queue, ticket, token, wait, resp, status)
+			resp, status = h.waitForMatchmakingResult(r.Context(), version, queue, ticket, resp.Token, wait, resp, status)
 		}
 	}
 

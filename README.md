@@ -36,7 +36,7 @@ Specifying a port using -tlsport will implicitly enable TLS.
 | `-key` | cert.key | File to use as TLS key |
 | `-autocert` | "" | Domain for automatic TLS (Let's Encrypt) |
 | `-autocert-cache` | certs | Cache directory for autocert certificates |
-| `-nohttp` | false | Disables HTTP server |
+| `-nohttp` | false | Disables the application HTTP listener (autocert still serves ACME challenges on port 80) |
 | `-read-timeout` | 15s | HTTP read timeout |
 | `-write-timeout` | 15s | HTTP write timeout |
 | `-idle-timeout` | 60s | HTTP idle timeout |
@@ -72,6 +72,8 @@ When a capacity limit is reached, new state-creating requests return `503 Servic
 * `antistatic-server -read-timeout 30s -write-timeout 30s` - Custom timeouts
 * `antistatic-server -trust-proxy -trusted-proxy-cidrs 127.0.0.1/32` - Trust proxy headers from a local reverse proxy
 
+Automatic TLS listens on all interfaces at `-tlsport` (port 443 when omitted). With `-nohttp`, the application HTTP listener stays disabled, but autocert still opens port 80 on all interfaces for ACME HTTP-01 challenges. Both TCP ports must be publicly reachable for certificate issuance and HTTPS service.
+
 ### Built-in STUN responder
 
 The server can answer RFC 5389 Binding Requests on a UDP port so the
@@ -103,7 +105,7 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health` | Health check (returns status, live counts, startup lobby creation total, successful game estimate, error count, version) |
+| `GET` | `/health` | Health check (returns status, startup time, live counts, lifetime counters, recent errors, unknown paths, and version) |
 | `PUT` | `/{version}/lobby/{key}/{port}` | Register/update a lobby member |
 | `DELETE` | `/{version}/lobby/{key}/{port}` | Remove a lobby member |
 | `GET` | `/lobby/{key}/{port}` | Legacy endpoint (no version) |
@@ -117,13 +119,15 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
 ```json
 {
   "status": "ok",
+  "start_time": "2026-04-27T09:17:56.123Z",
   "lobby_count": 3,
   "ticket_count": 2,
   "match_count": 1,
   "tag_lease_count": 1,
   "lobbies_created": 12,
-  "successful_games_estimate": 8,
-  "error_count": 1,
+  "successful_matches": 8,
+  "client_error_count": 1,
+  "server_error_count": 0,
   "version": "0.6.4"
 }
 ```
@@ -131,11 +135,14 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
 ### Lobby Check-In PUT Body
 ```json
 {
-  "local_ips": ["192.168.1.20", "10.0.0.20"]
+  "local_ips": ["192.168.1.20", "10.0.0.20"],
+  "local_endpoints": [
+    {"ip": "192.168.1.20", "port": 45860}
+  ]
 }
 ```
 
-`local_ips` is optional. When present, entries are sanitized to private-scope addresses and only reflected to lobby peers seen from the same public IP.
+`local_ips` and `local_endpoints` are optional. Entries are sanitized to private-scope addresses, and non-loopback endpoint IPs must also appear in `local_ips`. They are only reflected to lobby peers seen from the same public IP.
 
 ### Lobby Check-In Response
 ```json
@@ -144,15 +151,18 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
     "key": "ABC123",
     "members": [
       {
-        "ip": "198.51.100.10",
-        "port": 45860,
+        "endpoints": [
+          {"ip": "198.51.100.10", "port": 45860}
+        ],
         "local_ips": ["192.168.1.20"]
       }
     ],
     "version": "0.9.5"
   },
-  "ip": "198.51.100.10",
-  "port": 45860,
+  "endpoint": {
+    "ip": "198.51.100.10",
+    "port": 45860
+  },
   "token": "member-owner-token"
 }
 ```
@@ -161,11 +171,14 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
 ```json
 {
   "character": "Carbon",
-  "local_ips": ["192.168.1.20", "10.0.0.20"]
+  "local_ips": ["192.168.1.20", "10.0.0.20"],
+  "local_endpoints": [
+    {"ip": "192.168.1.20", "port": 45860}
+  ]
 }
 ```
 
-`local_ips` is optional for matchmaking too. Entries are sanitized to private-scope addresses and only reflected to matched peers seen from the same public IP, allowing same-NAT or same-host clients to try LAN/loopback tunnel candidates without exposing LAN addresses to unrelated WAN peers.
+The local fields follow the same sanitization and visibility rules as lobby check-ins. They let same-NAT or same-host clients try LAN/loopback tunnel candidates without exposing local addresses to unrelated WAN peers.
 
 For Match by Code queues (`code.<tag>-<tag>`), clients also send:
 
@@ -184,8 +197,9 @@ Waiting, matched, and canceled matchmaking responses include aggregate `queue` m
 {
   "status": "waiting",
   "ticket": "ticket-id",
-  "ip": "198.51.100.10",
-  "port": 45860,
+  "endpoints": [
+    {"ip": "198.51.100.10", "port": 45860}
+  ],
   "token": "ticket-owner-token",
   "queue": {
     "players_waiting": 1,
@@ -199,25 +213,31 @@ Waiting, matched, and canceled matchmaking responses include aggregate `queue` m
 
 The queue data is privacy-preserving aggregate state only. It does not include other players' tickets, IPs, characters, or tokens.
 
+A matchmaking `PUT` may include `?wait=N` to wait up to `N` seconds for a match before returning a waiting response. Values are clamped to 10 seconds, and the request returns early when the ticket is matched or the client disconnects.
+
 ### Matchmaking Matched Response
 ```json
 {
   "status": "matched",
   "ticket": "ticket-id",
-  "ip": "198.51.100.10",
-  "port": 45860,
+  "endpoints": [
+    {"ip": "198.51.100.10", "port": 45860}
+  ],
   "token": "ticket-owner-token",
   "match": {
     "id": "0.9.5|default|TicketA|TicketB",
     "role": "host",
+    "matched_at_ms": 1783692000123,
     "peer": {
-      "ip": "198.51.100.20",
-      "port": 45861,
+      "endpoints": [
+        {"ip": "198.51.100.20", "port": 45861}
+      ],
       "character": "Silicon"
     },
     "self": {
-      "ip": "198.51.100.10",
-      "port": 45860,
+      "endpoints": [
+        {"ip": "198.51.100.10", "port": 45860}
+      ],
       "character": "Carbon"
     }
   }
@@ -245,9 +265,9 @@ docker build -t antistatic-server .
 docker run -p 80:80 -p 443:443 antistatic-server
 ```
 
-Or with custom flags:
+For automatic TLS, publish both ACME/HTTP and HTTPS and persist the certificate cache:
 ```bash
-docker run -p 8080:8080 antistatic-server -port 8080 -tls -autocert example.com
+docker run -p 80:80 -p 443:443 -v antistatic-certs:/certs antistatic-server -autocert example.com -autocert-cache /certs
 ```
 
 ## Building

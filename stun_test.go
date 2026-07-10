@@ -62,7 +62,7 @@ func TestStunBindingResponse(t *testing.T) {
 	if !bytes.Equal(resp[8:stunHeaderLength], txn) {
 		t.Fatalf("transaction id mismatch: got %x want %x", resp[8:stunHeaderLength], txn)
 	}
-	if got := binary.BigEndian.Uint16(resp[stunHeaderLength:stunHeaderLength+2]); got != stunXorMappedAddrType {
+	if got := binary.BigEndian.Uint16(resp[stunHeaderLength : stunHeaderLength+2]); got != stunXorMappedAddrType {
 		t.Fatalf("attr type = %#x, want XOR-MAPPED-ADDRESS", got)
 	}
 	body := resp[stunHeaderLength+4:]

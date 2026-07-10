@@ -28,8 +28,8 @@ const (
 )
 
 type stunServer struct {
-	conn     *net.UDPConn
-	wg       sync.WaitGroup
+	conn      *net.UDPConn
+	wg        sync.WaitGroup
 	closeOnce sync.Once
 }
 
