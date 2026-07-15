@@ -114,7 +114,9 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 | `GET` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Poll matchmaking ticket status |
 | `DELETE` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Cancel a matchmaking ticket |
 
-Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header. The first successful `PUT` for a lobby member or matchmaking ticket returns a `token`; clients must send that token in `X-Antistatic-Token` when refreshing, polling, or deleting the same member/ticket. Tokens are bearer credentials and should not be logged or shared.
+| `POST` | `/{version}/matchmaking/{queue}/{ticket}/{port}/report` | Submit an authenticated coarse game-failure report |
+
+Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header. The first successful `PUT` for a lobby member or matchmaking ticket returns a `token`; clients must send that token in `X-Antistatic-Token` when refreshing, polling, deleting, or reporting on the same member/ticket. Tokens are bearer credentials and should not be logged or shared.
 
 ### Health Endpoint Response
 ```json
@@ -148,11 +150,12 @@ The counters are in-memory and reset on restart; they are intended as a rough
 guide for when queueing is likely to be quieter, not as a player census.
 
 The `http_errors` and `game_errors` arrays contain only a short, bounded list
-of coarse error codes. HTTP errors are protocol or request failures such as an
-invalid path. Game errors are server failures and authenticated client reports
-of a small, fixed set of connection/handshake/runtime failures. Timestamps are
-rounded to 15 minutes and request paths, addresses, tokens, and free-form
-client messages are never included in the health response.
+of coarse error codes, alongside the aggregate error counters. HTTP errors are
+protocol or request failures such as an invalid path. Game errors are server
+failures and authenticated client reports of a small, fixed set of
+connection/handshake/runtime failures. Timestamps are rounded to 15 minutes
+and request paths, addresses, tokens, and free-form client messages are never
+included in the health response.
 
 ### Lobby Check-In PUT Body
 ```json
@@ -245,7 +248,8 @@ failure with an authenticated `POST`:
 `POST /{version}/matchmaking/{queue}/{ticket}/{port}/report`
 
 The request must include the ticket's `X-Antistatic-Token` and one strict JSON
-event code:
+event code. The server keeps only the fixed event code in its bounded recent
+log and aggregate counter:
 
 ```json
 {"event":"match_connect_failed"}

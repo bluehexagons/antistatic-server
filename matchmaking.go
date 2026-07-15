@@ -868,6 +868,10 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, v
 		return
 	}
 
+	if r.Body == nil {
+		h.respondError(w, "Invalid game report", http.StatusBadRequest)
+		return
+	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var report gameReportRequest
