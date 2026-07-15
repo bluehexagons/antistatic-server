@@ -107,13 +107,13 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 |--------|----------|-------------|
 | `GET` | `/health` | JSON health check with live counts, split HTTP/game error logs, and aggregate activity |
 | `GET` | `/health.html` | Human-readable HTML health view with the same data |
+| `GET` | `/events` | Upcoming recurring community queue events |
 | `PUT` | `/{version}/lobby/{key}/{port}` | Register/update a lobby member |
 | `DELETE` | `/{version}/lobby/{key}/{port}` | Remove a lobby member |
 | `GET` | `/lobby/{key}/{port}` | Legacy endpoint (no version) |
 | `PUT` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Register or refresh a matchmaking ticket |
 | `GET` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Poll matchmaking ticket status |
 | `DELETE` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Cancel a matchmaking ticket |
-
 | `POST` | `/{version}/matchmaking/{queue}/{ticket}/{port}/report` | Submit an authenticated coarse game-failure report |
 
 Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header. The first successful `PUT` for a lobby member or matchmaking ticket returns a `token`; clients must send that token in `X-Antistatic-Token` when refreshing, polling, deleting, or reporting on the same member/ticket. Tokens are bearer credentials and should not be logged or shared.
@@ -129,6 +129,12 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
   "tag_lease_count": 1,
   "lobbies_created": 12,
   "successful_matches": 8,
+  "match_created_count": 8,
+  "queue_attempt_count": 23,
+  "match_connection_success_count": 6,
+  "match_connection_failure_count": 2,
+  "queue_cancellation_count": 9,
+  "queue_expiration_count": 4,
   "http_error_count": 1,
   "game_error_count": 0,
   "activity": {
@@ -138,6 +144,20 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
       {"hour_utc": 0, "attempts": 12, "matches": 4, "average_match_wait_ms": 22000}
     ]
   },
+  "events": [
+    {
+      "id": "americas-community-queue",
+      "name": "Americas community queue",
+      "region": "Americas",
+      "weekday": "Saturday",
+      "start_hour_utc": 21,
+      "start_minute_utc": 0,
+      "duration_minutes": 60,
+      "active": false,
+      "starts_at_utc": "2026-08-01T21:00:00Z",
+      "ends_at_utc": "2026-08-01T22:00:00Z"
+    }
+  ],
   "version": "0.6.4"
 }
 ```
@@ -146,8 +166,16 @@ The `activity.hours` values are aggregated across all queues for the last 14
 days and grouped only by UTC hour. It records successful matchmaking-ticket
 creations and matches, not IP addresses, ticket IDs, queue names, characters,
 tags, or tokens. Hour buckets with fewer than three attempts are suppressed.
+Visible buckets also include client connection successes/failures and queue
+cancellations/expirations.
 The counters are in-memory and reset on restart; they are intended as a rough
 guide for when queueing is likely to be quieter, not as a player census.
+
+`match_created_count` counts pairs formed by the server. The connection success
+and failure counters come from the client report contract below; a match with
+no report is intentionally left as unreported rather than guessed as a
+failure. Queue cancellations and expirations count tickets that were canceled
+or waited past their timeout.
 
 The `http_errors` and `game_errors` arrays contain only a short, bounded list
 of coarse error codes, alongside the aggregate error counters. HTTP errors are
@@ -238,6 +266,11 @@ Waiting, matched, and canceled matchmaking responses include aggregate `queue` m
 
 The queue data is privacy-preserving aggregate state only. It does not include other players' tickets, IPs, characters, or tokens.
 
+Queue responses may also include cumulative `queue_attempt_count`,
+`match_connection_success_count`, `match_connection_failure_count`,
+`queue_cancellation_count`, and `queue_expiration_count` for that queue. These
+are aggregate counters and do not identify other players.
+
 A matchmaking `PUT` may include `?wait=N` to wait up to `N` seconds for a match before returning a waiting response. Values are clamped to 10 seconds, and the request returns early when the ticket is matched or the client disconnects.
 
 ### Client game reports
@@ -255,12 +288,29 @@ log and aggregate counter:
 {"event":"match_connect_failed"}
 ```
 
-Supported event codes are `match_connect_failed`, `match_handshake_failed`,
-and `match_runtime_error`. The server validates ownership and stores only the
-event's aggregate count and coarse time bucket; it discards the request's
-ticket, address, queue, and any other identifying details. Clients should send
-these reports only for failures they can classify, rather than uploading
-diagnostic text or stack traces.
+Supported event codes are `match_connected`, `match_connect_failed`,
+`match_handshake_failed`, and `match_runtime_error`. Reports are authenticated,
+idempotent per event and ticket, and the server stores only aggregate counters
+and coarse time buckets; it discards the request's ticket, address, queue, and
+any other identifying details. Clients should send these reports only for
+outcomes they can classify, rather than uploading diagnostic text or stack
+traces. `match_connected` should be sent once the game connection/handshake is
+usable; a later `match_runtime_error` may report a failure after connection.
+
+### Recurring community queue events
+
+The server advertises the next occurrence of two public one-hour invitations
+through `/events`, the health responses, and matchmaking responses:
+
+| Event | UTC schedule |
+|-------|--------------|
+| Americas community queue | Saturday 21:00–22:00 UTC |
+| Eurasia community queue | Sunday 18:00–19:00 UTC |
+
+The schedule is a suggestion to concentrate otherwise sparse activity, not a
+tracked session. Clients should convert `starts_at_utc` and `ends_at_utc` to
+local time and may show a reminder or countdown. UTC keeps the advertised
+instant stable when local daylight-saving rules change.
 
 ### Matchmaking Matched Response
 ```json

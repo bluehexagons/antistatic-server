@@ -115,6 +115,25 @@ func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
 		t.Fatalf("game error count = %d, want one report", got)
 	}
 
+	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connected"}, firstResponse.Token)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("successful game report status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if got := h.Metrics.matchSuccesses.Load(); got != 1 {
+		t.Fatalf("match connection success count = %d, want one report", got)
+	}
+
+	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connected"}, firstResponse.Token)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("duplicate game report status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	h.Mu.RLock()
+	stats := h.Queues[matchmakingQueueKey("0.9.5", "default")]
+	h.Mu.RUnlock()
+	if stats == nil || stats.Attempts != 2 || stats.Matches != 1 || stats.FailedConnections != 1 || stats.SuccessfulConnections != 1 {
+		t.Fatalf("queue stats = %#v, want attempts/match/outcomes", stats)
+	}
+
 	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "not-a-real-error"}, firstResponse.Token)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid game report status = %d, want %d", rec.Code, http.StatusBadRequest)

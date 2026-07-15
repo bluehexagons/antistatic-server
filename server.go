@@ -59,16 +59,24 @@ type recentGameError struct {
 }
 
 type activityBucket struct {
-	Start          time.Time
-	Attempts       int64
-	Matches        int64
-	MatchWaitTotal int64
+	Start              time.Time
+	Attempts           int64
+	Matches            int64
+	MatchWaitTotal     int64
+	MatchSuccesses     int64
+	MatchFailures      int64
+	QueueCancellations int64
+	QueueExpirations   int64
 }
 
 type activityHour struct {
 	HourUTC            int   `json:"hour_utc"`
 	Attempts           int64 `json:"attempts,omitempty"`
 	Matches            int64 `json:"matches,omitempty"`
+	MatchSuccesses     int64 `json:"match_successes,omitempty"`
+	MatchFailures      int64 `json:"match_failures,omitempty"`
+	QueueCancellations int64 `json:"queue_cancellations,omitempty"`
+	QueueExpirations   int64 `json:"queue_expirations,omitempty"`
 	AverageMatchWaitMs int64 `json:"average_match_wait_ms,omitempty"`
 	Suppressed         bool  `json:"suppressed,omitempty"`
 }
@@ -80,10 +88,15 @@ type activitySummary struct {
 }
 
 type serverMetrics struct {
-	lobbiesCreated    atomic.Int64
-	successfulMatches atomic.Int64
-	httpErrors        atomic.Int64
-	gameErrors        atomic.Int64
+	lobbiesCreated     atomic.Int64
+	successfulMatches  atomic.Int64
+	queueAttempts      atomic.Int64
+	matchSuccesses     atomic.Int64
+	matchFailures      atomic.Int64
+	queueCancellations atomic.Int64
+	queueExpirations   atomic.Int64
+	httpErrors         atomic.Int64
+	gameErrors         atomic.Int64
 
 	recentMu         sync.Mutex
 	recentHTTPErrors []recentError
@@ -188,6 +201,7 @@ func (m *serverMetrics) activityBucketLocked(now time.Time) *activityBucket {
 }
 
 func (m *serverMetrics) recordMatchmakingAttempt(now time.Time) {
+	m.queueAttempts.Add(1)
 	m.activityMu.Lock()
 	m.activityBucketLocked(now).Attempts++
 	m.activityMu.Unlock()
@@ -201,12 +215,47 @@ func (m *serverMetrics) recordMatchmakingMatch(now time.Time, wait time.Duration
 	m.activityMu.Unlock()
 }
 
+func (m *serverMetrics) recordMatchmakingOutcome(now time.Time, event string) {
+	m.activityMu.Lock()
+	bucket := m.activityBucketLocked(now)
+	switch event {
+	case "match_connected":
+		m.matchSuccesses.Add(1)
+		bucket.MatchSuccesses++
+	case "match_connect_failed", "match_handshake_failed", "match_runtime_error":
+		m.matchFailures.Add(1)
+		bucket.MatchFailures++
+	default:
+		m.activityMu.Unlock()
+		return
+	}
+	m.activityMu.Unlock()
+}
+
+func (m *serverMetrics) recordQueueCancellation(now time.Time) {
+	m.queueCancellations.Add(1)
+	m.activityMu.Lock()
+	m.activityBucketLocked(now).QueueCancellations++
+	m.activityMu.Unlock()
+}
+
+func (m *serverMetrics) recordQueueExpiration(now time.Time) {
+	m.queueExpirations.Add(1)
+	m.activityMu.Lock()
+	m.activityBucketLocked(now).QueueExpirations++
+	m.activityMu.Unlock()
+}
+
 func (m *serverMetrics) snapshotActivity(now time.Time) activitySummary {
 	now = now.UTC()
 	cutoff := now.Add(-activityWindowDays * 24 * time.Hour)
 	var attempts [activityHourCount]int64
 	var matches [activityHourCount]int64
 	var waits [activityHourCount]int64
+	var successes [activityHourCount]int64
+	var failures [activityHourCount]int64
+	var cancellations [activityHourCount]int64
+	var expirations [activityHourCount]int64
 	m.activityMu.Lock()
 	for _, bucket := range m.activity {
 		if bucket.Start.IsZero() || bucket.Start.Before(cutoff) || bucket.Start.After(now) {
@@ -216,6 +265,10 @@ func (m *serverMetrics) snapshotActivity(now time.Time) activitySummary {
 		attempts[hour] += bucket.Attempts
 		matches[hour] += bucket.Matches
 		waits[hour] += bucket.MatchWaitTotal
+		successes[hour] += bucket.MatchSuccesses
+		failures[hour] += bucket.MatchFailures
+		cancellations[hour] += bucket.QueueCancellations
+		expirations[hour] += bucket.QueueExpirations
 	}
 	m.activityMu.Unlock()
 
@@ -227,6 +280,10 @@ func (m *serverMetrics) snapshotActivity(now time.Time) activitySummary {
 		} else {
 			entry.Attempts = attempts[hour]
 			entry.Matches = matches[hour]
+			entry.MatchSuccesses = successes[hour]
+			entry.MatchFailures = failures[hour]
+			entry.QueueCancellations = cancellations[hour]
+			entry.QueueExpirations = expirations[hour]
 			if matches[hour] > 0 {
 				entry.AverageMatchWaitMs = waits[hour] / matches[hour]
 			}
@@ -252,22 +309,29 @@ type lobbyHandler struct {
 }
 
 type healthResponse struct {
-	Status            string            `json:"status"`
-	StartTime         time.Time         `json:"start_time"`
-	LobbyCount        int               `json:"lobby_count"`
-	TicketCount       int               `json:"ticket_count"`
-	MatchCount        int               `json:"match_count"`
-	TagLeaseCount     int               `json:"tag_lease_count"`
-	LobbiesCreated    int64             `json:"lobbies_created"`
-	SuccessfulMatches int64             `json:"successful_matches"`
-	HTTPErrorCount    int64             `json:"http_error_count"`
-	GameErrorCount    int64             `json:"game_error_count"`
-	ClientErrorCount  int64             `json:"client_error_count"` // deprecated alias
-	ServerErrorCount  int64             `json:"server_error_count"` // deprecated alias
-	RecentHTTPErrors  []recentError     `json:"http_errors,omitempty"`
-	RecentGameErrors  []recentGameError `json:"game_errors,omitempty"`
-	Activity          activitySummary   `json:"activity"`
-	Version           string            `json:"version"`
+	Status            string                `json:"status"`
+	StartTime         time.Time             `json:"start_time"`
+	LobbyCount        int                   `json:"lobby_count"`
+	TicketCount       int                   `json:"ticket_count"`
+	MatchCount        int                   `json:"match_count"`
+	TagLeaseCount     int                   `json:"tag_lease_count"`
+	LobbiesCreated    int64                 `json:"lobbies_created"`
+	SuccessfulMatches int64                 `json:"successful_matches"`
+	MatchCreatedCount int64                 `json:"match_created_count"`
+	QueueAttemptCount int64                 `json:"queue_attempt_count"`
+	MatchSuccessCount int64                 `json:"match_connection_success_count"`
+	MatchFailureCount int64                 `json:"match_connection_failure_count"`
+	QueueCancelCount  int64                 `json:"queue_cancellation_count"`
+	QueueExpireCount  int64                 `json:"queue_expiration_count"`
+	HTTPErrorCount    int64                 `json:"http_error_count"`
+	GameErrorCount    int64                 `json:"game_error_count"`
+	ClientErrorCount  int64                 `json:"client_error_count"` // deprecated alias
+	ServerErrorCount  int64                 `json:"server_error_count"` // deprecated alias
+	RecentHTTPErrors  []recentError         `json:"http_errors,omitempty"`
+	RecentGameErrors  []recentGameError     `json:"game_errors,omitempty"`
+	Activity          activitySummary       `json:"activity"`
+	Events            []recurringQueueEvent `json:"events"`
+	Version           string                `json:"version"`
 }
 
 func (h *lobbyHandler) healthResponse() healthResponse {
@@ -284,6 +348,12 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		TagLeaseCount:     len(h.TagLeases),
 		LobbiesCreated:    h.Metrics.lobbiesCreated.Load(),
 		SuccessfulMatches: h.Metrics.successfulMatches.Load(),
+		MatchCreatedCount: h.Metrics.successfulMatches.Load(),
+		QueueAttemptCount: h.Metrics.queueAttempts.Load(),
+		MatchSuccessCount: h.Metrics.matchSuccesses.Load(),
+		MatchFailureCount: h.Metrics.matchFailures.Load(),
+		QueueCancelCount:  h.Metrics.queueCancellations.Load(),
+		QueueExpireCount:  h.Metrics.queueExpirations.Load(),
 		HTTPErrorCount:    httpErrorCount,
 		GameErrorCount:    gameErrorCount,
 		ClientErrorCount:  httpErrorCount,
@@ -291,6 +361,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		RecentHTTPErrors:  httpErrors,
 		RecentGameErrors:  gameErrors,
 		Activity:          h.Metrics.snapshotActivity(time.Now()),
+		Events:            recurringQueueEvents(time.Now()),
 		Version:           serverVersion,
 	}
 	h.Mu.RUnlock()

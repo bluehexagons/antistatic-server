@@ -76,6 +76,11 @@ var healthHTMLTemplate = template.Must(template.New("health").Parse(`<!doctype h
     <tr><th>Metric</th><th>Count</th></tr>
     <tr><td>Lobby creations</td><td>{{.LobbiesCreated}}</td></tr>
     <tr><td>Successful matches</td><td>{{.SuccessfulMatches}}</td></tr>
+    <tr><td>Queue attempts</td><td>{{.QueueAttemptCount}}</td></tr>
+    <tr><td>Match connection successes</td><td>{{.MatchSuccessCount}}</td></tr>
+    <tr><td>Match connection failures</td><td>{{.MatchFailureCount}}</td></tr>
+    <tr><td>Queue cancellations</td><td>{{.QueueCancelCount}}</td></tr>
+    <tr><td>Queue expirations</td><td>{{.QueueExpireCount}}</td></tr>
     <tr><td>HTTP errors</td><td>{{.HTTPErrorCount}}</td></tr>
     <tr><td>Game errors</td><td>{{.GameErrorCount}}</td></tr>
   </table>
@@ -83,10 +88,16 @@ var healthHTMLTemplate = template.Must(template.New("health").Parse(`<!doctype h
   <h2>Queue activity</h2>
   <p>Anonymous aggregate from the last {{.Activity.WindowDays}} days, grouped by UTC hour. Buckets with fewer than three attempts are hidden.</p>
   <table border="1">
-    <tr><th>UTC hour</th><th>Attempts</th><th>Matches</th><th>Average match wait</th></tr>
+    <tr><th>UTC hour</th><th>Attempts</th><th>Matches</th><th>Connected</th><th>Failed</th><th>Average match wait</th></tr>
     {{range .Activity.Hours}}
-    <tr><td>{{printf "%02d:00" .HourUTC}}</td><td>{{if .Suppressed}}&lt; 3{{else}}{{.Attempts}}{{end}}</td><td>{{if .Suppressed}}—{{else}}{{.Matches}}{{end}}</td><td>{{if .Suppressed}}—{{else if .AverageMatchWaitMs}}{{.AverageMatchWaitMs}} ms{{else}}—{{end}}</td></tr>
+    <tr><td>{{printf "%02d:00" .HourUTC}}</td><td>{{if .Suppressed}}&lt; 3{{else}}{{.Attempts}}{{end}}</td><td>{{if .Suppressed}}—{{else}}{{.Matches}}{{end}}</td><td>{{if .Suppressed}}—{{else}}{{.MatchSuccesses}}{{end}}</td><td>{{if .Suppressed}}—{{else}}{{.MatchFailures}}{{end}}</td><td>{{if .Suppressed}}—{{else if .AverageMatchWaitMs}}{{.AverageMatchWaitMs}} ms{{else}}—{{end}}</td></tr>
     {{end}}
+  </table>
+
+  <h2>Recurring community queues</h2>
+  <table border="1">
+    <tr><th>Event</th><th>Region</th><th>UTC schedule</th><th>Status</th></tr>
+    {{range .Events}}<tr><td>{{.Name}}</td><td>{{.Region}}</td><td>{{.StartsAtUTC}} – {{.EndsAtUTC}}</td><td>{{if .Active}}Active{{else}}Upcoming{{end}}</td></tr>{{end}}
   </table>
 
   <h2>Recent HTTP errors</h2>
@@ -163,6 +174,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/health.html", healthHTMLHandler)
+	mux.HandleFunc("/events", eventsHandler)
 	mux.HandleFunc("/robots.txt", robotsHandler)
 	mux.Handle("/", handler)
 

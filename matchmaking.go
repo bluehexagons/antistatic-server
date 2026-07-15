@@ -46,6 +46,7 @@ type MatchmakingTicket struct {
 	MatchedID      string     `json:"matched_id"`
 	stateChanged   chan struct{}
 	changeNotified bool
+	reportedEvents uint8
 }
 
 type MatchmakingTagLease struct {
@@ -130,8 +131,13 @@ type Match struct {
 }
 
 type MatchmakingQueue struct {
-	Matches            int64
-	AverageMatchWaitMs int64
+	Attempts              int64
+	Matches               int64
+	AverageMatchWaitMs    int64
+	SuccessfulConnections int64
+	FailedConnections     int64
+	Cancellations         int64
+	Expirations           int64
 }
 
 type matchmakingPeer struct {
@@ -154,11 +160,16 @@ type matchmakingMatchResponse struct {
 }
 
 type matchmakingQueueResponse struct {
-	PlayersWaiting     int   `json:"players_waiting"`
-	OwnWaitMs          int64 `json:"own_wait_ms,omitempty"`
-	OldestWaitMs       int64 `json:"oldest_wait_ms,omitempty"`
-	MatchCount         int64 `json:"match_count,omitempty"`
-	AverageMatchWaitMs int64 `json:"average_match_wait_ms,omitempty"`
+	PlayersWaiting         int   `json:"players_waiting"`
+	OwnWaitMs              int64 `json:"own_wait_ms,omitempty"`
+	OldestWaitMs           int64 `json:"oldest_wait_ms,omitempty"`
+	QueueAttemptCount      int64 `json:"queue_attempt_count,omitempty"`
+	MatchCount             int64 `json:"match_count,omitempty"`
+	AverageMatchWaitMs     int64 `json:"average_match_wait_ms,omitempty"`
+	MatchSuccessCount      int64 `json:"match_connection_success_count,omitempty"`
+	MatchFailureCount      int64 `json:"match_connection_failure_count,omitempty"`
+	QueueCancellationCount int64 `json:"queue_cancellation_count,omitempty"`
+	QueueExpirationCount   int64 `json:"queue_expiration_count,omitempty"`
 }
 
 type matchmakingResponse struct {
@@ -169,6 +180,7 @@ type matchmakingResponse struct {
 	TagToken  string                    `json:"tag_token,omitempty"`
 	Match     *matchmakingMatchResponse `json:"match,omitempty"`
 	Queue     *matchmakingQueueResponse `json:"queue,omitempty"`
+	Events    []recurringQueueEvent     `json:"events,omitempty"`
 }
 
 type matchmakingRequest struct {
@@ -183,10 +195,25 @@ type gameReportRequest struct {
 
 func validGameReportEvent(event string) bool {
 	switch event {
-	case "match_connect_failed", "match_handshake_failed", "match_runtime_error":
+	case "match_connected", "match_connect_failed", "match_handshake_failed", "match_runtime_error":
 		return true
 	default:
 		return false
+	}
+}
+
+func gameReportEventBit(event string) uint8 {
+	switch event {
+	case "match_connected":
+		return 1 << 0
+	case "match_connect_failed":
+		return 1 << 1
+	case "match_handshake_failed":
+		return 1 << 2
+	case "match_runtime_error":
+		return 1 << 3
+	default:
+		return 0
 	}
 }
 
@@ -356,6 +383,7 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 		}
 
 		if !ticket.waiting(now) {
+			h.recordQueueExpirationLocked(ticket, now)
 			h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
 		}
 	}
@@ -409,8 +437,13 @@ func (h *lobbyHandler) matchmakingQueueResponseLocked(ticket *MatchmakingTicket,
 	}
 
 	if stats := h.Queues[queueKey]; stats != nil {
+		response.QueueAttemptCount = stats.Attempts
 		response.MatchCount = stats.Matches
 		response.AverageMatchWaitMs = stats.AverageMatchWaitMs
+		response.MatchSuccessCount = stats.SuccessfulConnections
+		response.MatchFailureCount = stats.FailedConnections
+		response.QueueCancellationCount = stats.Cancellations
+		response.QueueExpirationCount = stats.Expirations
 	}
 
 	return response
@@ -424,6 +457,7 @@ func (h *lobbyHandler) matchmakingTicketResponseLocked(status string, ticket *Ma
 		Token:     ticket.Token,
 		TagToken:  ticket.TagToken,
 		Queue:     h.matchmakingQueueResponseLocked(ticket, now),
+		Events:    recurringQueueEvents(now),
 	}
 }
 
@@ -575,7 +609,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	if match != nil {
 		h.Tickets[key] = ticket
 		h.addWaitingTicketLocked(ticket)
-		h.Metrics.recordMatchmakingAttempt(now)
+		h.recordMatchmakingAttemptLocked(version, queue, now)
 		h.registerMatchLocked(match, ticket, other)
 		resp := h.matchmakingTicketResponseLocked("matched", ticket, now)
 		resp.Match = match.responseFor(ticket.ID)
@@ -584,6 +618,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 
 	h.Tickets[key] = ticket
 	h.addWaitingTicketLocked(ticket)
+	h.recordMatchmakingAttemptLocked(version, queue, now)
 	return h.matchmakingTicketResponseLocked("waiting", ticket, now), http.StatusOK
 }
 
@@ -659,17 +694,57 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 }
 
 func (h *lobbyHandler) recordMatchmakingQueueWaitLocked(match *Match, first, second *MatchmakingTicket) {
-	queueKey := matchmakingQueueKey(match.Version, match.Queue)
-	if h.Queues[queueKey] == nil {
-		if len(h.Queues) >= maxMatchmakingQueues {
-			return
-		}
-		h.Queues[queueKey] = &MatchmakingQueue{}
+	stats := h.queueStatsLocked(match.Version, match.Queue)
+	if stats == nil {
+		return
 	}
-	stats := h.Queues[queueKey]
 	waitMs := maxInt64(0, (match.CreatedAt.Sub(first.CreatedAt).Milliseconds()+match.CreatedAt.Sub(second.CreatedAt).Milliseconds())/2)
 	stats.Matches++
 	stats.AverageMatchWaitMs += (waitMs - stats.AverageMatchWaitMs) / stats.Matches
+}
+
+func (h *lobbyHandler) queueStatsLocked(version, queue string) *MatchmakingQueue {
+	h.ensureMatchmakingIndexesLocked()
+	queueKey := matchmakingQueueKey(version, queue)
+	if h.Queues[queueKey] == nil {
+		if len(h.Queues) >= maxMatchmakingQueues {
+			return nil
+		}
+		h.Queues[queueKey] = &MatchmakingQueue{}
+	}
+	return h.Queues[queueKey]
+}
+
+func (h *lobbyHandler) recordMatchmakingAttemptLocked(version, queue string, now time.Time) {
+	h.Metrics.recordMatchmakingAttempt(now)
+	if stats := h.queueStatsLocked(version, queue); stats != nil {
+		stats.Attempts++
+	}
+}
+
+func (h *lobbyHandler) recordQueueCancellationLocked(ticket *MatchmakingTicket, now time.Time) {
+	h.Metrics.recordQueueCancellation(now)
+	if stats := h.queueStatsLocked(ticket.Version, ticket.Queue); stats != nil {
+		stats.Cancellations++
+	}
+}
+
+func (h *lobbyHandler) recordQueueExpirationLocked(ticket *MatchmakingTicket, now time.Time) {
+	h.Metrics.recordQueueExpiration(now)
+	if stats := h.queueStatsLocked(ticket.Version, ticket.Queue); stats != nil {
+		stats.Expirations++
+	}
+}
+
+func (h *lobbyHandler) recordMatchmakingOutcomeLocked(ticket *MatchmakingTicket, event string, now time.Time) {
+	h.Metrics.recordMatchmakingOutcome(now, event)
+	if stats := h.queueStatsLocked(ticket.Version, ticket.Queue); stats != nil {
+		if event == "match_connected" {
+			stats.SuccessfulConnections++
+		} else {
+			stats.FailedConnections++
+		}
+	}
 }
 
 func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, token string, now time.Time) (*matchmakingResponse, int) {
@@ -694,6 +769,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 	}
 
 	if !ticket.waiting(now) {
+		h.recordQueueExpirationLocked(ticket, now)
 		h.deleteTicketLocked(version, queue, ticketID)
 		return nil, http.StatusNotFound
 	}
@@ -711,6 +787,7 @@ func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, 
 	if token == "" || token != ticket.Token {
 		return nil, http.StatusForbidden
 	}
+	h.recordQueueCancellationLocked(ticket, time.Now())
 
 	resp := h.matchmakingTicketResponseLocked("canceled", ticket, time.Now())
 
@@ -903,9 +980,19 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, v
 		h.respondError(w, "Matchmaking ticket is not matched", http.StatusConflict)
 		return
 	}
+	bit := gameReportEventBit(report.Event)
+	if t.reportedEvents&bit != 0 {
+		h.Mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	t.reportedEvents |= bit
+	h.recordMatchmakingOutcomeLocked(t, report.Event, time.Now())
 	h.Mu.Unlock()
 
-	h.Metrics.recordGameError(report.Event)
+	if report.Event != "match_connected" {
+		h.Metrics.recordGameError(report.Event)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
