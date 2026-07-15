@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestLobbyHandler() *lobbyHandler {
@@ -80,10 +81,40 @@ func TestHealthReportsStartupMetrics(t *testing.T) {
 	h.Metrics.recordLobbyCreated()
 	h.Metrics.recordSuccessfulMatch()
 	h.Metrics.recordError("test error", http.StatusInternalServerError)
+	h.Metrics.recordError("Invalid path", http.StatusNotFound)
 
 	resp := h.healthResponse()
-	if resp.Status != "ok" || resp.LobbiesCreated != 1 || resp.SuccessfulMatches != 1 || resp.ServerErrorCount != 1 {
+	if resp.Status != "ok" || resp.LobbiesCreated != 1 || resp.SuccessfulMatches != 1 || resp.GameErrorCount != 1 || resp.HTTPErrorCount != 1 {
 		t.Fatalf("health response = %#v, want counters to be reported", resp)
+	}
+	if len(resp.RecentGameErrors) != 1 || resp.RecentGameErrors[0].Code != "test_error" {
+		t.Fatalf("game errors = %#v, want one anonymized game error", resp.RecentGameErrors)
+	}
+	if len(resp.RecentHTTPErrors) != 1 || resp.RecentHTTPErrors[0].Code != "invalid_path" {
+		t.Fatalf("HTTP errors = %#v, want one anonymized HTTP error", resp.RecentHTTPErrors)
+	}
+}
+
+func TestHealthActivityAggregatesAndSuppressesSmallBuckets(t *testing.T) {
+	h := newTestLobbyHandler()
+	now := time.Date(2026, time.July, 15, 12, 30, 0, 0, time.UTC)
+	for i := 0; i < 2; i++ {
+		h.Metrics.recordMatchmakingAttempt(now.Add(-time.Duration(i) * 24 * time.Hour))
+	}
+	for i := 0; i < 3; i++ {
+		h.Metrics.recordMatchmakingAttempt(now.Add(-time.Duration(i) * 24 * time.Hour).Add(-2 * time.Hour))
+	}
+	h.Metrics.recordMatchmakingMatch(now.Add(-2*time.Hour), 4*time.Second)
+
+	activity := h.Metrics.snapshotActivity(now)
+	if activity.WindowDays != activityWindowDays || activity.Timezone != "UTC" || len(activity.Hours) != 24 {
+		t.Fatalf("activity summary = %#v, want 14-day UTC hourly summary", activity)
+	}
+	if !activity.Hours[12].Suppressed || activity.Hours[12].Attempts != 0 {
+		t.Fatalf("small activity bucket = %#v, want suppressed", activity.Hours[12])
+	}
+	if activity.Hours[10].Suppressed || activity.Hours[10].Attempts != 3 || activity.Hours[10].Matches != 1 || activity.Hours[10].AverageMatchWaitMs != 4000 {
+		t.Fatalf("activity bucket = %#v, want aggregate counts and wait", activity.Hours[10])
 	}
 }
 
@@ -344,6 +375,30 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	}
 	if resp.Version != serverVersion {
 		t.Fatalf("health version = %q, want %q", resp.Version, serverVersion)
+	}
+}
+
+func TestHealthHTMLEndpoint(t *testing.T) {
+	previous := handler
+	defer func() { handler = previous }()
+	handler = newTestLobbyHandler()
+	handler.Metrics.recordHTTPError("Invalid path", http.StatusNotFound)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health.html", nil)
+	healthHTMLHandler(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("HTML health response = status %d, content type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Antistatic server health", "Queue activity", "Recent HTTP errors", "invalid_path"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("HTML health body missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "<script") {
+		t.Fatal("HTML health view should not contain scripts")
 	}
 }
 

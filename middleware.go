@@ -105,6 +105,7 @@ type rateLimiter struct {
 	rate     float64
 	burst    float64
 	interval time.Duration
+	metrics  *serverMetrics
 	stop     chan struct{}
 	stopOnce sync.Once
 }
@@ -210,10 +211,16 @@ func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
 		if ip == "" {
+			if rl.metrics != nil {
+				rl.metrics.recordHTTPError("Unable to determine client IP", http.StatusBadRequest)
+			}
 			http.Error(w, "Unable to determine client IP", http.StatusBadRequest)
 			return
 		}
 		if !rl.allow(ip) {
+			if rl.metrics != nil {
+				rl.metrics.recordHTTPError("Rate limit exceeded", http.StatusTooManyRequests)
+			}
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}

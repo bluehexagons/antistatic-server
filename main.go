@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"flag"
+	"html/template"
 	"log/slog"
 	"net"
 	"net/http"
@@ -39,10 +40,73 @@ var stunHost = ""
 var stunPort = 0
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	resp, _ := json.Marshal(handler.healthResponse())
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(resp)
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(handler.healthResponse()); err != nil {
+		slog.Error("Health JSON response failed", "error", err)
+	}
+}
+
+var healthHTMLTemplate = template.Must(template.New("health").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Antistatic server health</title>
+</head>
+<body>
+  <h1>Antistatic server health</h1>
+  <p>Status: <strong>{{.Status}}</strong> · Version: {{.Version}}</p>
+  <p>Started: {{.StartTime.UTC}}</p>
+
+  <h2>Live state</h2>
+  <table border="1">
+    <tr><th>Item</th><th>Count</th></tr>
+    <tr><td>Lobbies</td><td>{{.LobbyCount}}</td></tr>
+    <tr><td>Tickets</td><td>{{.TicketCount}}</td></tr>
+    <tr><td>Matches</td><td>{{.MatchCount}}</td></tr>
+    <tr><td>Tag leases</td><td>{{.TagLeaseCount}}</td></tr>
+  </table>
+
+  <h2>Totals</h2>
+  <table border="1">
+    <tr><th>Metric</th><th>Count</th></tr>
+    <tr><td>Lobby creations</td><td>{{.LobbiesCreated}}</td></tr>
+    <tr><td>Successful matches</td><td>{{.SuccessfulMatches}}</td></tr>
+    <tr><td>HTTP errors</td><td>{{.HTTPErrorCount}}</td></tr>
+    <tr><td>Game errors</td><td>{{.GameErrorCount}}</td></tr>
+  </table>
+
+  <h2>Queue activity</h2>
+  <p>Anonymous aggregate from the last {{.Activity.WindowDays}} days, grouped by UTC hour. Buckets with fewer than three attempts are hidden.</p>
+  <table border="1">
+    <tr><th>UTC hour</th><th>Attempts</th><th>Matches</th><th>Average match wait</th></tr>
+    {{range .Activity.Hours}}
+    <tr><td>{{printf "%02d:00" .HourUTC}}</td><td>{{if .Suppressed}}&lt; 3{{else}}{{.Attempts}}{{end}}</td><td>{{if .Suppressed}}—{{else}}{{.Matches}}{{end}}</td><td>{{if .Suppressed}}—{{else if .AverageMatchWaitMs}}{{.AverageMatchWaitMs}} ms{{else}}—{{end}}</td></tr>
+    {{end}}
+  </table>
+
+  <h2>Recent HTTP errors</h2>
+  {{if .RecentHTTPErrors}}<ul>{{range .RecentHTTPErrors}}<li>{{.Time.UTC}} · HTTP {{.Status}} · {{.Code}}</li>{{end}}</ul>{{else}}<p>None recorded.</p>{{end}}
+
+  <h2>Recent game errors</h2>
+  {{if .RecentGameErrors}}<ul>{{range .RecentGameErrors}}<li>{{.Time.UTC}} · {{.Code}}</li>{{end}}</ul>{{else}}<p>None recorded.</p>{{end}}
+</body>
+</html>`))
+
+func healthHTMLHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := healthHTMLTemplate.Execute(w, handler.healthResponse()); err != nil {
+		slog.Error("Health HTML response failed", "error", err)
+	}
 }
 
 func robotsHandler(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +162,7 @@ func main() {
 	var wg sync.WaitGroup
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/health.html", healthHTMLHandler)
 	mux.HandleFunc("/robots.txt", robotsHandler)
 	mux.Handle("/", handler)
 
@@ -112,6 +177,7 @@ func main() {
 	}
 
 	rl := newRateLimiter(60, 120, time.Minute)
+	rl.metrics = &handler.Metrics
 	defer rl.Stop()
 
 	httpHandler := requestIDMiddleware(

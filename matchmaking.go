@@ -177,6 +177,19 @@ type matchmakingRequest struct {
 	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
 }
 
+type gameReportRequest struct {
+	Event string `json:"event"`
+}
+
+func validGameReportEvent(event string) bool {
+	switch event {
+	case "match_connect_failed", "match_handshake_failed", "match_runtime_error":
+		return true
+	default:
+		return false
+	}
+}
+
 func matchmakingTicketKey(version, queue, ticket string) string {
 	return strings.Join([]string{version, queue, ticket}, "|")
 }
@@ -562,6 +575,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	if match != nil {
 		h.Tickets[key] = ticket
 		h.addWaitingTicketLocked(ticket)
+		h.Metrics.recordMatchmakingAttempt(now)
 		h.registerMatchLocked(match, ticket, other)
 		resp := h.matchmakingTicketResponseLocked("matched", ticket, now)
 		resp.Match = match.responseFor(ticket.ID)
@@ -636,6 +650,8 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	h.removeWaitingTicketLocked(first)
 	h.removeWaitingTicketLocked(second)
 	h.recordMatchmakingQueueWaitLocked(match, first, second)
+	waitMs := maxInt64(0, (match.CreatedAt.Sub(first.CreatedAt).Milliseconds()+match.CreatedAt.Sub(second.CreatedAt).Milliseconds())/2)
+	h.Metrics.recordMatchmakingMatch(match.CreatedAt, time.Duration(waitMs)*time.Millisecond)
 	h.Matches[match.ID] = match
 	first.notifyStateChangedLocked()
 	second.notifyStateChangedLocked()
@@ -824,6 +840,69 @@ func (h *lobbyHandler) waitForMatchmakingResult(
 		return resp, status
 	}
 	return fallbackResp, fallbackStatus
+}
+
+// serveGameReport accepts only a small, authenticated vocabulary of client
+// game failures. The event code is aggregated in memory by hour; the ticket,
+// address, character, queue, and any client-supplied message are discarded.
+func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, version, queue, ticketID string, port int) {
+	if !validateVersion(version) {
+		h.respondError(w, "Invalid version", http.StatusBadRequest)
+		return
+	}
+	if !validateMatchmakingQueue(queue) {
+		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
+		return
+	}
+	queue, ok := normalizeMatchmakingQueue(queue)
+	if !ok {
+		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
+		return
+	}
+	if !validateMatchmakingTicket(ticketID) {
+		h.respondError(w, "Invalid matchmaking ticket", http.StatusBadRequest)
+		return
+	}
+	if !validatePort(port) {
+		h.respondError(w, "Invalid port", http.StatusBadRequest)
+		return
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var report gameReportRequest
+	if err := decoder.Decode(&report); err != nil {
+		h.respondError(w, "Invalid game report", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF || !validGameReportEvent(report.Event) {
+		h.respondError(w, "Invalid game report", http.StatusBadRequest)
+		return
+	}
+
+	token := r.Header.Get(antistaticTokenHeader)
+	key := matchmakingTicketKey(version, queue, ticketID)
+	h.Mu.Lock()
+	t := h.Tickets[key]
+	if t == nil {
+		h.Mu.Unlock()
+		h.respondError(w, "Matchmaking ticket not found", http.StatusNotFound)
+		return
+	}
+	if token == "" || token != t.Token {
+		h.Mu.Unlock()
+		h.respondError(w, "Invalid matchmaking ticket token", http.StatusForbidden)
+		return
+	}
+	if t.MatchedID == "" {
+		h.Mu.Unlock()
+		h.respondError(w, "Matchmaking ticket is not matched", http.StatusConflict)
+		return
+	}
+	h.Mu.Unlock()
+
+	h.Metrics.recordGameError(report.Event)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, ip, version, queue, ticket string, port int) {

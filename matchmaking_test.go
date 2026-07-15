@@ -97,6 +97,37 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	}
 }
 
+func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	firstResponse := decodeMatchmakingResponse(t, first)
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	if second.Code != http.StatusOK || decodeMatchmakingResponse(t, second).Status != "matched" {
+		t.Fatalf("second ticket did not match: status=%d body=%s", second.Code, second.Body.String())
+	}
+
+	target := "/0.9.5/matchmaking/default/TicketA/45860/report"
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connect_failed"}, firstResponse.Token)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("game report status = %d, want %d: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if got := h.Metrics.gameErrors.Load(); got != 1 {
+		t.Fatalf("game error count = %d, want one report", got)
+	}
+
+	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "not-a-real-error"}, firstResponse.Token)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid game report status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, "wrong-token")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unauthorized game report status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if got := h.Metrics.gameErrors.Load(); got != 1 {
+		t.Fatalf("unauthorized/invalid reports changed game error count to %d", got)
+	}
+}
+
 func TestMatchmakingWaitingResponseIncludesQueueWaits(t *testing.T) {
 	h := newTestLobbyHandler()
 	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
@@ -922,7 +953,7 @@ func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid character status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if got := h.Metrics.clientErrors.Load(); got == 0 {
+	if got := h.Metrics.httpErrors.Load(); got == 0 {
 		t.Fatalf("client error counter = %d, want > 0", got)
 	}
 

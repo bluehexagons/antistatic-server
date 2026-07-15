@@ -96,7 +96,7 @@ func (s *stunServer) handlePacket(b []byte, raddr *net.UDPAddr) {
 		return
 	}
 	if _, err := s.conn.WriteToUDP(resp, raddr); err != nil {
-		slog.Debug("STUN write error", "error", err, "remote", raddr.String())
+		slog.Debug("STUN write error", "error", err)
 	}
 }
 

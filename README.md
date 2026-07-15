@@ -13,7 +13,7 @@ Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 - Rate limiting to prevent abuse
 - Bounded in-memory lobby, matchmaking, and rate-limit state
 - Docker support
-- Health endpoint with lobby and matchmaking statistics
+- JSON and HTML health views with privacy-preserving lobby and matchmaking statistics
 
 ## Basic use
 By default, running `antistatic-server` will run on port 80 without enabling HTTPS.
@@ -105,7 +105,8 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/health` | Health check (returns status, startup time, live counts, lifetime counters, recent errors, unknown paths, and version) |
+| `GET` | `/health` | JSON health check with live counts, split HTTP/game error logs, and aggregate activity |
+| `GET` | `/health.html` | Human-readable HTML health view with the same data |
 | `PUT` | `/{version}/lobby/{key}/{port}` | Register/update a lobby member |
 | `DELETE` | `/{version}/lobby/{key}/{port}` | Remove a lobby member |
 | `GET` | `/lobby/{key}/{port}` | Legacy endpoint (no version) |
@@ -126,11 +127,32 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
   "tag_lease_count": 1,
   "lobbies_created": 12,
   "successful_matches": 8,
-  "client_error_count": 1,
-  "server_error_count": 0,
+  "http_error_count": 1,
+  "game_error_count": 0,
+  "activity": {
+    "window_days": 14,
+    "timezone": "UTC",
+    "hours": [
+      {"hour_utc": 0, "attempts": 12, "matches": 4, "average_match_wait_ms": 22000}
+    ]
+  },
   "version": "0.6.4"
 }
 ```
+
+The `activity.hours` values are aggregated across all queues for the last 14
+days and grouped only by UTC hour. It records successful matchmaking-ticket
+creations and matches, not IP addresses, ticket IDs, queue names, characters,
+tags, or tokens. Hour buckets with fewer than three attempts are suppressed.
+The counters are in-memory and reset on restart; they are intended as a rough
+guide for when queueing is likely to be quieter, not as a player census.
+
+The `http_errors` and `game_errors` arrays contain only a short, bounded list
+of coarse error codes. HTTP errors are protocol or request failures such as an
+invalid path. Game errors are server failures and authenticated client reports
+of a small, fixed set of connection/handshake/runtime failures. Timestamps are
+rounded to 15 minutes and request paths, addresses, tokens, and free-form
+client messages are never included in the health response.
 
 ### Lobby Check-In PUT Body
 ```json
@@ -214,6 +236,27 @@ Waiting, matched, and canceled matchmaking responses include aggregate `queue` m
 The queue data is privacy-preserving aggregate state only. It does not include other players' tickets, IPs, characters, or tokens.
 
 A matchmaking `PUT` may include `?wait=N` to wait up to `N` seconds for a match before returning a waiting response. Values are clamped to 10 seconds, and the request returns early when the ticket is matched or the client disconnects.
+
+### Client game reports
+
+After a matchmaking ticket has been matched, the client may report a game
+failure with an authenticated `POST`:
+
+`POST /{version}/matchmaking/{queue}/{ticket}/{port}/report`
+
+The request must include the ticket's `X-Antistatic-Token` and one strict JSON
+event code:
+
+```json
+{"event":"match_connect_failed"}
+```
+
+Supported event codes are `match_connect_failed`, `match_handshake_failed`,
+and `match_runtime_error`. The server validates ownership and stores only the
+event's aggregate count and coarse time bucket; it discards the request's
+ticket, address, queue, and any other identifying details. Clients should send
+these reports only for failures they can classify, rather than uploading
+diagnostic text or stack traces.
 
 ### Matchmaking Matched Response
 ```json

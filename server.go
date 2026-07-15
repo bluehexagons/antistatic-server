@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +18,12 @@ const maxPathLength = 512
 const maxLobbies = 10000
 
 const recentErrorCap = 20
+const activityWindowDays = 14
+const activityBucketCount = activityWindowDays * 24
+const activityPrivacyThreshold = 3
+const activityHourCount = 24
+const activityBucketDuration = time.Hour
+const healthTimestampPrecision = 15 * time.Minute
 
 func lobbyStorageKey(version, key string) string {
 	return version + "|" + key
@@ -43,27 +48,49 @@ func normalizeServerVersion(version string) string {
 }
 
 type recentError struct {
-	Time    time.Time `json:"time"`
-	Message string    `json:"message"`
-	Status  int       `json:"status"`
+	Time   time.Time `json:"time"`
+	Code   string    `json:"code"`
+	Status int       `json:"status"`
 }
 
-type pathCount struct {
-	Path  string `json:"path"`
-	Count int64  `json:"count"`
+type recentGameError struct {
+	Time time.Time `json:"time"`
+	Code string    `json:"code"`
+}
+
+type activityBucket struct {
+	Start          time.Time
+	Attempts       int64
+	Matches        int64
+	MatchWaitTotal int64
+}
+
+type activityHour struct {
+	HourUTC            int   `json:"hour_utc"`
+	Attempts           int64 `json:"attempts,omitempty"`
+	Matches            int64 `json:"matches,omitempty"`
+	AverageMatchWaitMs int64 `json:"average_match_wait_ms,omitempty"`
+	Suppressed         bool  `json:"suppressed,omitempty"`
+}
+
+type activitySummary struct {
+	WindowDays int            `json:"window_days"`
+	Timezone   string         `json:"timezone"`
+	Hours      []activityHour `json:"hours"`
 }
 
 type serverMetrics struct {
 	lobbiesCreated    atomic.Int64
 	successfulMatches atomic.Int64
-	clientErrors      atomic.Int64
-	serverErrors      atomic.Int64
+	httpErrors        atomic.Int64
+	gameErrors        atomic.Int64
 
-	recentMu     sync.Mutex
-	recentErrors []recentError
+	recentMu         sync.Mutex
+	recentHTTPErrors []recentError
+	recentGameErrors []recentGameError
 
-	unknownPathMu     sync.Mutex
-	unknownPathCounts map[string]int64
+	activityMu sync.Mutex
+	activity   [activityBucketCount]activityBucket
 }
 
 func (m *serverMetrics) recordLobbyCreated() {
@@ -74,67 +101,139 @@ func (m *serverMetrics) recordSuccessfulMatch() {
 	m.successfulMatches.Add(1)
 }
 
-func (m *serverMetrics) recordError(msg string, status int) {
-	if status >= 500 {
-		m.serverErrors.Add(1)
-	} else {
-		m.clientErrors.Add(1)
+func normalizeMetricCode(message string) string {
+	var b strings.Builder
+	for _, c := range strings.ToLower(message) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			b.WriteRune(c)
+		case b.Len() == 0 || b.String()[b.Len()-1] != '_':
+			b.WriteByte('_')
+		}
+		if b.Len() >= 64 {
+			break
+		}
 	}
+	return strings.Trim(b.String(), "_")
+}
+
+func healthTime(t time.Time) time.Time {
+	return t.UTC().Truncate(healthTimestampPrecision)
+}
+
+func (m *serverMetrics) recordHTTPError(msg string, status int) {
+	m.httpErrors.Add(1)
 	m.recentMu.Lock()
-	m.recentErrors = append(m.recentErrors, recentError{Time: time.Now(), Message: msg, Status: status})
-	if len(m.recentErrors) > recentErrorCap {
-		m.recentErrors = m.recentErrors[len(m.recentErrors)-recentErrorCap:]
+	m.recentHTTPErrors = append(m.recentHTTPErrors, recentError{
+		Time:   healthTime(time.Now()),
+		Code:   normalizeMetricCode(msg),
+		Status: status,
+	})
+	if len(m.recentHTTPErrors) > recentErrorCap {
+		m.recentHTTPErrors = m.recentHTTPErrors[len(m.recentHTTPErrors)-recentErrorCap:]
 	}
 	m.recentMu.Unlock()
 }
 
-func (m *serverMetrics) snapshotRecentErrors() []recentError {
+func (m *serverMetrics) recordGameError(msg string) {
+	m.gameErrors.Add(1)
+	m.recentMu.Lock()
+	m.recentGameErrors = append(m.recentGameErrors, recentGameError{
+		Time: healthTime(time.Now()),
+		Code: normalizeMetricCode(msg),
+	})
+	if len(m.recentGameErrors) > recentErrorCap {
+		m.recentGameErrors = m.recentGameErrors[len(m.recentGameErrors)-recentErrorCap:]
+	}
+	m.recentMu.Unlock()
+}
+
+// recordError is retained as the single response-error entry point. Anything
+// the client can correct is an HTTP error; 5xx responses are server/game
+// failures. Neither category stores request paths or other user input.
+func (m *serverMetrics) recordError(msg string, status int) {
+	if status >= 500 {
+		m.recordGameError(msg)
+	} else {
+		m.recordHTTPError(msg, status)
+	}
+}
+
+func (m *serverMetrics) snapshotRecentErrors() ([]recentError, []recentGameError) {
 	m.recentMu.Lock()
 	defer m.recentMu.Unlock()
-	if len(m.recentErrors) == 0 {
-		return nil
+	var httpErrors []recentError
+	if len(m.recentHTTPErrors) > 0 {
+		httpErrors = append([]recentError(nil), m.recentHTTPErrors...)
 	}
-	out := make([]recentError, len(m.recentErrors))
-	copy(out, m.recentErrors)
-	return out
+	var gameErrors []recentGameError
+	if len(m.recentGameErrors) > 0 {
+		gameErrors = append([]recentGameError(nil), m.recentGameErrors...)
+	}
+	return httpErrors, gameErrors
 }
 
-func (m *serverMetrics) recordUnknownPath(path string) {
-	const maxUnknownPathKeys = 1000
-	if len(path) > 64 {
-		path = path[:64]
-	}
-	m.unknownPathMu.Lock()
-	if m.unknownPathCounts == nil {
-		m.unknownPathCounts = make(map[string]int64)
-	}
-	if _, exists := m.unknownPathCounts[path]; exists || len(m.unknownPathCounts) < maxUnknownPathKeys {
-		m.unknownPathCounts[path]++
-	}
-	m.unknownPathMu.Unlock()
+func (m *serverMetrics) activityIndex(start time.Time) int {
+	return int(start.Unix()/int64(activityBucketDuration/time.Hour)) % activityBucketCount
 }
 
-func (m *serverMetrics) snapshotUnknownPaths() []pathCount {
-	const maxUnknownPathsInResponse = 20
-	m.unknownPathMu.Lock()
-	defer m.unknownPathMu.Unlock()
-	if len(m.unknownPathCounts) == 0 {
-		return nil
+func (m *serverMetrics) activityBucketLocked(now time.Time) *activityBucket {
+	start := now.UTC().Truncate(activityBucketDuration)
+	index := m.activityIndex(start)
+	bucket := &m.activity[index]
+	if !bucket.Start.Equal(start) {
+		*bucket = activityBucket{Start: start}
 	}
-	out := make([]pathCount, 0, len(m.unknownPathCounts))
-	for p, c := range m.unknownPathCounts {
-		out = append(out, pathCount{Path: p, Count: c})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
+	return bucket
+}
+
+func (m *serverMetrics) recordMatchmakingAttempt(now time.Time) {
+	m.activityMu.Lock()
+	m.activityBucketLocked(now).Attempts++
+	m.activityMu.Unlock()
+}
+
+func (m *serverMetrics) recordMatchmakingMatch(now time.Time, wait time.Duration) {
+	m.activityMu.Lock()
+	bucket := m.activityBucketLocked(now)
+	bucket.Matches++
+	bucket.MatchWaitTotal += maxInt64(0, wait.Milliseconds())
+	m.activityMu.Unlock()
+}
+
+func (m *serverMetrics) snapshotActivity(now time.Time) activitySummary {
+	now = now.UTC()
+	cutoff := now.Add(-activityWindowDays * 24 * time.Hour)
+	var attempts [activityHourCount]int64
+	var matches [activityHourCount]int64
+	var waits [activityHourCount]int64
+	m.activityMu.Lock()
+	for _, bucket := range m.activity {
+		if bucket.Start.IsZero() || bucket.Start.Before(cutoff) || bucket.Start.After(now) {
+			continue
 		}
-		return out[i].Path < out[j].Path
-	})
-	if len(out) > maxUnknownPathsInResponse {
-		out = out[:maxUnknownPathsInResponse]
+		hour := bucket.Start.Hour()
+		attempts[hour] += bucket.Attempts
+		matches[hour] += bucket.Matches
+		waits[hour] += bucket.MatchWaitTotal
 	}
-	return out
+	m.activityMu.Unlock()
+
+	hours := make([]activityHour, 0, activityHourCount)
+	for hour := 0; hour < activityHourCount; hour++ {
+		entry := activityHour{HourUTC: hour}
+		if attempts[hour] < activityPrivacyThreshold {
+			entry.Suppressed = attempts[hour] > 0
+		} else {
+			entry.Attempts = attempts[hour]
+			entry.Matches = matches[hour]
+			if matches[hour] > 0 {
+				entry.AverageMatchWaitMs = waits[hour] / matches[hour]
+			}
+		}
+		hours = append(hours, entry)
+	}
+	return activitySummary{WindowDays: activityWindowDays, Timezone: "UTC", Hours: hours}
 }
 
 type lobbyHandler struct {
@@ -153,23 +252,29 @@ type lobbyHandler struct {
 }
 
 type healthResponse struct {
-	Status            string        `json:"status"`
-	StartTime         time.Time     `json:"start_time"`
-	LobbyCount        int           `json:"lobby_count"`
-	TicketCount       int           `json:"ticket_count"`
-	MatchCount        int           `json:"match_count"`
-	TagLeaseCount     int           `json:"tag_lease_count"`
-	LobbiesCreated    int64         `json:"lobbies_created"`
-	SuccessfulMatches int64         `json:"successful_matches"`
-	ClientErrorCount  int64         `json:"client_error_count"`
-	ServerErrorCount  int64         `json:"server_error_count"`
-	RecentErrors      []recentError `json:"recent_errors,omitempty"`
-	UnknownPaths      []pathCount   `json:"unknown_paths,omitempty"`
-	Version           string        `json:"version"`
+	Status            string            `json:"status"`
+	StartTime         time.Time         `json:"start_time"`
+	LobbyCount        int               `json:"lobby_count"`
+	TicketCount       int               `json:"ticket_count"`
+	MatchCount        int               `json:"match_count"`
+	TagLeaseCount     int               `json:"tag_lease_count"`
+	LobbiesCreated    int64             `json:"lobbies_created"`
+	SuccessfulMatches int64             `json:"successful_matches"`
+	HTTPErrorCount    int64             `json:"http_error_count"`
+	GameErrorCount    int64             `json:"game_error_count"`
+	ClientErrorCount  int64             `json:"client_error_count"` // deprecated alias
+	ServerErrorCount  int64             `json:"server_error_count"` // deprecated alias
+	RecentHTTPErrors  []recentError     `json:"http_errors,omitempty"`
+	RecentGameErrors  []recentGameError `json:"game_errors,omitempty"`
+	Activity          activitySummary   `json:"activity"`
+	Version           string            `json:"version"`
 }
 
 func (h *lobbyHandler) healthResponse() healthResponse {
 	h.Mu.RLock()
+	httpErrors, gameErrors := h.Metrics.snapshotRecentErrors()
+	httpErrorCount := h.Metrics.httpErrors.Load()
+	gameErrorCount := h.Metrics.gameErrors.Load()
 	resp := healthResponse{
 		Status:            "ok",
 		StartTime:         serverStartTime,
@@ -179,10 +284,13 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		TagLeaseCount:     len(h.TagLeases),
 		LobbiesCreated:    h.Metrics.lobbiesCreated.Load(),
 		SuccessfulMatches: h.Metrics.successfulMatches.Load(),
-		ClientErrorCount:  h.Metrics.clientErrors.Load(),
-		ServerErrorCount:  h.Metrics.serverErrors.Load(),
-		RecentErrors:      h.Metrics.snapshotRecentErrors(),
-		UnknownPaths:      h.Metrics.snapshotUnknownPaths(),
+		HTTPErrorCount:    httpErrorCount,
+		GameErrorCount:    gameErrorCount,
+		ClientErrorCount:  httpErrorCount,
+		ServerErrorCount:  gameErrorCount,
+		RecentHTTPErrors:  httpErrors,
+		RecentGameErrors:  gameErrors,
+		Activity:          h.Metrics.snapshotActivity(time.Now()),
 		Version:           serverVersion,
 	}
 	h.Mu.RUnlock()
@@ -212,7 +320,7 @@ func (h *lobbyHandler) Maintain() {
 						l.Clean()
 						if len(l.Members) == 0 {
 							delete(h.Lobbies, k)
-							slog.Info("Lobby emptied (timeout)", "key", k)
+							slog.Info("Lobby emptied (timeout)")
 						}
 					}
 					h.cleanupMatchmakingLocked(now)
@@ -246,12 +354,12 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ip := getClientIP(r)
 	if ip == "" {
 		h.respondError(w, "Invalid remote address", http.StatusBadRequest)
-		slog.Error("Request rejected: invalid remote address", "requestID", getRequestID(r), "remoteAddr", r.RemoteAddr)
+		slog.Error("Request rejected: invalid remote address", "requestID", getRequestID(r))
 		return
 	}
 
 	switch r.Method {
-	case http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions:
+	case http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodPost:
 	default:
 		h.respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -259,7 +367,6 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	path := strings.Trim(r.URL.Path, "/")
 	if path == "" {
-		h.Metrics.recordUnknownPath("")
 		h.respondError(w, "Invalid path", http.StatusNotFound)
 		return
 	}
@@ -269,13 +376,11 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	info := parts
 	if parts[0] != "lobby" {
 		if len(parts) < 2 {
-			h.Metrics.recordUnknownPath(parts[0])
 			h.respondError(w, "Invalid path", http.StatusNotFound)
 			return
 		}
 		version = parts[0]
 		if !validateVersion(version) {
-			h.Metrics.recordUnknownPath(parts[0])
 			h.respondError(w, "Invalid version", http.StatusBadRequest)
 			return
 		}
@@ -283,17 +388,26 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(info) < 1 || info[0] != "lobby" {
 		if len(info) < 1 || info[0] != "matchmaking" {
-			segment := ""
-			if len(info) > 0 {
-				segment = info[0]
-			}
-			h.Metrics.recordUnknownPath(version + "/" + segment)
 			h.respondError(w, "Invalid path", http.StatusNotFound)
 			return
 		}
 	}
 
 	if r.Method == "OPTIONS" {
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		if info[0] != "matchmaking" || len(info) != 5 || info[4] != "report" {
+			h.respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		port, err := strconv.Atoi(info[3])
+		if err != nil || !validatePort(port) {
+			h.respondError(w, "Invalid port", http.StatusBadRequest)
+			return
+		}
+		h.serveGameReport(w, r, version, info[1], info[2], port)
 		return
 	}
 
@@ -306,7 +420,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key := info[1]
 		if !validateLobbyKey(key) {
 			h.respondError(w, "Invalid lobby key", http.StatusBadRequest)
-			slog.Error("Request rejected: invalid lobby key", "requestID", getRequestID(r), "remoteAddr", r.RemoteAddr)
+			slog.Error("Request rejected: invalid lobby key", "requestID", getRequestID(r))
 			return
 		}
 
@@ -316,7 +430,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "key", key, "version", version)
+		slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "version", version)
 		token := r.Header.Get(antistaticTokenHeader)
 		storageKey := lobbyStorageKey(version, key)
 
@@ -349,7 +463,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "PUT" {
 				h.Lobbies[storageKey] = l
 				h.Metrics.recordLobbyCreated()
-				slog.Info("Created lobby", "requestID", getRequestID(r), "key", key, "version", version)
+				slog.Info("Created lobby", "requestID", getRequestID(r), "version", version)
 			}
 		} else {
 			l.Clean()
@@ -384,7 +498,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if len(l.Members) == 0 {
 				delete(h.Lobbies, storageKey)
-				slog.Info("Lobby emptied", "key", key)
+				slog.Info("Lobby emptied")
 			}
 		}
 
@@ -424,7 +538,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Matchmaking request", "requestID", getRequestID(r), "method", r.Method, "ip", ip, "port", port, "ticket", ticket, "queue", queue, "version", version)
+	slog.Info("Matchmaking request", "requestID", getRequestID(r), "method", r.Method, "version", version)
 	h.serveMatchmaking(w, r, ip, version, queue, ticket, port)
 }
 
