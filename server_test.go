@@ -351,6 +351,33 @@ func TestLobbyDeleteRequiresMemberToken(t *testing.T) {
 	}
 }
 
+func TestLobbyDeleteUsesTokenAcrossAddressFamilies(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "[2001:db8::1]:32000")
+	token := decodeLobbyResponse(t, first).Token
+
+	// The HTTP route used for cleanup need not match any UDP endpoint stored
+	// on the member. This happens when a dual-stack client checks in over one
+	// family but DNS selects the other family for its DELETE.
+	rec := serveLobbyRequestWithToken(
+		h,
+		http.MethodDelete,
+		"/0.9.5/lobby/ABC123/45860",
+		"198.51.100.10:32000",
+		token,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cross-family DELETE with token status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	h.Mu.RLock()
+	_, ok := h.Lobbies[lobbyStorageKey("0.9.5", "ABC123")]
+	h.Mu.RUnlock()
+	if ok {
+		t.Fatalf("lobby remained after cross-family authorized delete")
+	}
+}
+
 func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	handler = newTestLobbyHandler()
 	handler.Mu.Lock()

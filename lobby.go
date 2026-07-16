@@ -109,15 +109,19 @@ func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string, lo
 	return memberToken, nil
 }
 
-func (l *Lobby) CheckOut(ip string, port int, token string) error {
+// CheckOut removes the member that owns token. The token, rather than the
+// request's current public endpoint, is authoritative: a dual-stack client may
+// leave over a different address family than the one that created its member,
+// and NAT mappings can change between check-in and checkout.
+func (l *Lobby) CheckOut(token string) error {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
+	if token == "" {
+		return errLobbyMemberTokenMismatch
+	}
 	for k, m := range l.Members {
-		if !m.MatchesEndpoint(ip, port) {
+		if token != m.Token {
 			continue
-		}
-		if token == "" || token != m.Token {
-			return errLobbyMemberTokenMismatch
 		}
 		if len(l.Members) > 1 {
 			l.Members[k] = l.Members[len(l.Members)-1]
@@ -127,5 +131,5 @@ func (l *Lobby) CheckOut(ip string, port int, token string) error {
 		}
 		return nil
 	}
-	return nil
+	return errLobbyMemberTokenMismatch
 }

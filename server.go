@@ -562,7 +562,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case "DELETE":
-			if err := l.CheckOut(ip, port, token); err == errLobbyMemberTokenMismatch {
+			if err := l.CheckOut(token); err == errLobbyMemberTokenMismatch {
 				h.Mu.Unlock()
 				h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
 				return
