@@ -54,8 +54,9 @@ type recentError struct {
 }
 
 type recentGameError struct {
-	Time time.Time `json:"time"`
-	Code string    `json:"code"`
+	Time     time.Time `json:"time"`
+	Code     string    `json:"code"`
+	ReportID string    `json:"report_id,omitempty"`
 }
 
 type activityBucket struct {
@@ -149,11 +150,16 @@ func (m *serverMetrics) recordHTTPError(msg string, status int) {
 }
 
 func (m *serverMetrics) recordGameError(msg string) {
+	m.recordGameErrorWithReportID(msg, "")
+}
+
+func (m *serverMetrics) recordGameErrorWithReportID(msg, reportID string) {
 	m.gameErrors.Add(1)
 	m.recentMu.Lock()
 	m.recentGameErrors = append(m.recentGameErrors, recentGameError{
-		Time: healthTime(time.Now()),
-		Code: normalizeMetricCode(msg),
+		Time:     healthTime(time.Now()),
+		Code:     normalizeMetricCode(msg),
+		ReportID: reportID,
 	})
 	if len(m.recentGameErrors) > recentErrorCap {
 		m.recentGameErrors = m.recentGameErrors[len(m.recentGameErrors)-recentErrorCap:]
@@ -222,7 +228,7 @@ func (m *serverMetrics) recordMatchmakingOutcome(now time.Time, event string) {
 	case "match_connected":
 		m.matchSuccesses.Add(1)
 		bucket.MatchSuccesses++
-	case "match_connect_failed", "match_handshake_failed", "match_runtime_error":
+	case "match_connect_failed", "match_handshake_failed":
 		m.matchFailures.Add(1)
 		bucket.MatchFailures++
 	default:

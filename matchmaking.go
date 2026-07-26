@@ -13,6 +13,7 @@ import (
 
 const matchmakingTicketTimeout = 30 * time.Second
 const matchmakingMatchTimeout = 2 * time.Minute
+const matchmakingReportRetention = 20 * time.Minute
 const matchmakingTagLeaseTimeout = time.Hour
 const maxMatchmakingTickets = 20000
 const maxMatchmakingMatches = 10000
@@ -23,6 +24,7 @@ const matchCodeQueuePrefix = "code."
 const antistaticMatchSelfTagHeader = "X-Antistatic-Match-Self-Tag"
 const antistaticMatchPeerTagHeader = "X-Antistatic-Match-Peer-Tag"
 const antistaticMatchSelfTagTokenHeader = "X-Antistatic-Match-Self-Tag-Token"
+const antistaticReportIDHeader = "X-Antistatic-Report-ID"
 
 // Long-poll bound for PUT requests that opt in via the ?wait= query
 // parameter. Clients use this to learn of a match without burning the
@@ -47,6 +49,7 @@ type MatchmakingTicket struct {
 	stateChanged   chan struct{}
 	changeNotified bool
 	reportedEvents uint8
+	reportIDs      [7]string
 }
 
 type MatchmakingTagLease struct {
@@ -111,6 +114,21 @@ func (t *MatchmakingTicket) notifyStateChangedLocked() {
 	if t.stateChanged != nil {
 		close(t.stateChanged)
 	}
+}
+
+// scrubForReportRetention drops player and endpoint metadata after the
+// short-lived peer-introduction window while retaining the routing/lifecycle
+// fields, bearer token, and deduplication state needed by the anonymous
+// game-report endpoint.
+func (t *MatchmakingTicket) scrubForReportRetention() {
+	t.Endpoints = nil
+	t.Character = ""
+	t.LocalIPs = nil
+	t.LocalEndpoints = nil
+	t.TagToken = ""
+	t.SelfTag = ""
+	t.PeerTag = ""
+	t.stateChanged = nil
 }
 
 type MatchParticipant struct {
@@ -194,26 +212,27 @@ type gameReportRequest struct {
 }
 
 func validGameReportEvent(event string) bool {
-	switch event {
-	case "match_connected", "match_connect_failed", "match_handshake_failed", "match_runtime_error":
-		return true
-	default:
-		return false
-	}
+	return gameReportEventIndex(event) >= 0
 }
 
-func gameReportEventBit(event string) uint8 {
+func gameReportEventIndex(event string) int {
 	switch event {
 	case "match_connected":
-		return 1 << 0
-	case "match_connect_failed":
-		return 1 << 1
-	case "match_handshake_failed":
-		return 1 << 2
-	case "match_runtime_error":
-		return 1 << 3
-	default:
 		return 0
+	case "match_connect_failed":
+		return 1
+	case "match_handshake_failed":
+		return 2
+	case "match_runtime_error":
+		return 3
+	case "match_sim_desync":
+		return 4
+	case "match_rollback_refused":
+		return 5
+	case "match_peer_timeout":
+		return 6
+	default:
+		return -1
 	}
 }
 
@@ -369,7 +388,9 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 		}
 
 		for _, player := range match.Players {
-			h.deleteTicketLocked(match.Version, match.Queue, player.TicketID)
+			if ticket := h.Tickets[matchmakingTicketKey(match.Version, match.Queue, player.TicketID)]; ticket != nil {
+				ticket.scrubForReportRetention()
+			}
 		}
 		delete(h.Matches, matchID)
 	}
@@ -377,7 +398,9 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 	for _, ticket := range h.Tickets {
 		if ticket.MatchedID != "" {
 			if _, ok := h.Matches[ticket.MatchedID]; !ok {
-				h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
+				if now.After(ticket.CheckedIn.Add(matchmakingReportRetention)) {
+					h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
+				}
 			}
 			continue
 		}
@@ -739,9 +762,10 @@ func (h *lobbyHandler) recordQueueExpirationLocked(ticket *MatchmakingTicket, no
 func (h *lobbyHandler) recordMatchmakingOutcomeLocked(ticket *MatchmakingTicket, event string, now time.Time) {
 	h.Metrics.recordMatchmakingOutcome(now, event)
 	if stats := h.queueStatsLocked(ticket.Version, ticket.Queue); stats != nil {
-		if event == "match_connected" {
+		switch event {
+		case "match_connected":
 			stats.SuccessfulConnections++
-		} else {
+		case "match_connect_failed", "match_handshake_failed":
 			stats.FailedConnections++
 		}
 	}
@@ -980,18 +1004,23 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, v
 		h.respondError(w, "Matchmaking ticket is not matched", http.StatusConflict)
 		return
 	}
-	bit := gameReportEventBit(report.Event)
+	eventIndex := gameReportEventIndex(report.Event)
+	bit := uint8(1 << eventIndex)
 	if t.reportedEvents&bit != 0 {
+		w.Header().Set(antistaticReportIDHeader, t.reportIDs[eventIndex])
 		h.Mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	reportID := "nr-" + generateRequestID()
 	t.reportedEvents |= bit
+	t.reportIDs[eventIndex] = reportID
 	h.recordMatchmakingOutcomeLocked(t, report.Event, time.Now())
 	h.Mu.Unlock()
 
+	w.Header().Set(antistaticReportIDHeader, reportID)
 	if report.Event != "match_connected" {
-		h.Metrics.recordGameError(report.Event)
+		h.Metrics.recordGameErrorWithReportID(report.Event, reportID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

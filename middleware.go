@@ -71,11 +71,12 @@ func getRequestID(r *http.Request) string {
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 		w.Header().Set(
 			"Access-Control-Allow-Headers",
 			"Content-Type, X-Request-ID, X-Antistatic-Token, X-Antistatic-Match-Self-Tag, X-Antistatic-Match-Peer-Tag, X-Antistatic-Match-Self-Tag-Token",
 		)
+		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, "+antistaticReportIDHeader)
 		w.Header().Set("Access-Control-Max-Age", "3600")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")

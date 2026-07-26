@@ -167,7 +167,8 @@ days and grouped only by UTC hour. It records successful matchmaking-ticket
 creations and matches, not IP addresses, ticket IDs, queue names, characters,
 tags, or tokens. Hour buckets with fewer than three attempts are suppressed.
 Visible buckets also include client connection successes/failures and queue
-cancellations/expirations.
+cancellations/expirations. Post-connect runtime diagnostics do not inflate the
+connection-failure counter.
 The counters are in-memory and reset on restart; they are intended as a rough
 guide for when queueing is likely to be quieter, not as a player census.
 
@@ -181,9 +182,11 @@ The `http_errors` and `game_errors` arrays contain only a short, bounded list
 of coarse error codes, alongside the aggregate error counters. HTTP errors are
 protocol or request failures such as an invalid path. Game errors are server
 failures and authenticated client reports of a small, fixed set of
-connection/handshake/runtime failures. Timestamps are rounded to 15 minutes
-and request paths, addresses, tokens, and free-form client messages are never
-included in the health response.
+connection/handshake/runtime failures. Client reports include an anonymous
+report ID so an operator can correlate a player's bug report with the coarse
+event. Timestamps are rounded to 15 minutes and request paths, addresses,
+tokens, and free-form client messages are never included in the health
+response.
 
 ### Lobby Check-In PUT Body
 ```json
@@ -289,13 +292,21 @@ log and aggregate counter:
 ```
 
 Supported event codes are `match_connected`, `match_connect_failed`,
-`match_handshake_failed`, and `match_runtime_error`. Reports are authenticated,
-idempotent per event and ticket, and the server stores only aggregate counters
-and coarse time buckets; it discards the request's ticket, address, queue, and
-any other identifying details. Clients should send these reports only for
-outcomes they can classify, rather than uploading diagnostic text or stack
-traces. `match_connected` should be sent once the game connection/handshake is
-usable; a later `match_runtime_error` may report a failure after connection.
+`match_handshake_failed`, `match_runtime_error`, `match_sim_desync`,
+`match_rollback_refused`, and `match_peer_timeout`. Reports are authenticated
+and idempotent per event and ticket. A successful response includes a stable
+`X-Antistatic-Report-ID`; clients can show that anonymous ID to the player for
+inclusion in a bug report.
+
+The peer-introduction match and its addresses are discarded after two minutes.
+The server retains a scrubbed ticket containing only routing/lifecycle fields,
+its bearer credential, and report deduplication state for 20 minutes so
+failures later in a normal match remain reportable. The health log stores only
+the fixed event, report ID, and coarse time; it does not store request paths,
+addresses, queue, character, free-form text, or stack traces.
+`match_connected` should be sent once the game connection/handshake is usable.
+Runtime diagnostic events are tracked separately and do not count as
+connection failures.
 
 ### Recurring community queue events
 

@@ -133,6 +133,12 @@ func TestSecurityHeaders(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, antistaticTokenHeader) {
 		t.Errorf("Access-Control-Allow-Headers = %q, want %s", got, antistaticTokenHeader)
 	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "POST") {
+		t.Errorf("Access-Control-Allow-Methods = %q, want POST", got)
+	}
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(got, antistaticReportIDHeader) {
+		t.Errorf("Access-Control-Expose-Headers = %q, want %s", got, antistaticReportIDHeader)
+	}
 }
 
 func TestSecurityHeadersOptions(t *testing.T) {

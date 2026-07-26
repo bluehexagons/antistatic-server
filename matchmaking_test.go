@@ -114,6 +114,14 @@ func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
 	if got := h.Metrics.gameErrors.Load(); got != 1 {
 		t.Fatalf("game error count = %d, want one report", got)
 	}
+	failureReportID := rec.Header().Get(antistaticReportIDHeader)
+	if failureReportID == "" {
+		t.Fatal("game report should return a report ID")
+	}
+	_, gameErrors := h.Metrics.snapshotRecentErrors()
+	if len(gameErrors) != 1 || gameErrors[0].ReportID != failureReportID {
+		t.Fatalf("recent game errors = %#v, want report ID %q", gameErrors, failureReportID)
+	}
 
 	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connected"}, firstResponse.Token)
 	if rec.Code != http.StatusNoContent {
@@ -126,6 +134,19 @@ func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
 	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connected"}, firstResponse.Token)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("duplicate game report status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	connectedReportID := rec.Header().Get(antistaticReportIDHeader)
+	if connectedReportID == "" {
+		t.Fatal("duplicate game report should return its original report ID")
+	}
+	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connected"}, firstResponse.Token)
+	if got := rec.Header().Get(antistaticReportIDHeader); got != connectedReportID {
+		t.Fatalf("duplicate report ID = %q, want stable %q", got, connectedReportID)
+	}
+
+	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_sim_desync"}, firstResponse.Token)
+	if rec.Code != http.StatusNoContent || rec.Header().Get(antistaticReportIDHeader) == "" {
+		t.Fatalf("sim-desync report status/header = %d/%q, want 204/report ID", rec.Code, rec.Header().Get(antistaticReportIDHeader))
 	}
 	h.Mu.RLock()
 	stats := h.Queues[matchmakingQueueKey("0.9.5", "default")]
@@ -142,8 +163,54 @@ func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("unauthorized game report status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
-	if got := h.Metrics.gameErrors.Load(); got != 1 {
-		t.Fatalf("unauthorized/invalid reports changed game error count to %d", got)
+	if got := h.Metrics.gameErrors.Load(); got != 2 {
+		t.Fatalf("authorized sim report plus invalid reports changed game error count to %d", got)
+	}
+}
+
+func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{
+		Character:      "Carbon",
+		LocalIPs:       []string{"192.168.1.10"},
+		LocalEndpoints: []Endpoint{{IP: "192.168.1.10", Port: 45860}},
+	})
+	firstResponse := decodeMatchmakingResponse(t, first)
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	if second.Code != http.StatusOK {
+		t.Fatalf("second ticket did not match: status=%d body=%s", second.Code, second.Body.String())
+	}
+
+	now := time.Now()
+	h.Mu.Lock()
+	for _, match := range h.Matches {
+		match.CreatedAt = now.Add(-matchmakingMatchTimeout - time.Second)
+	}
+	h.cleanupMatchmakingLocked(now)
+	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
+	if len(h.Matches) != 0 || len(h.Tickets) != 2 {
+		t.Fatalf("post-match cleanup retained matches/tickets = %d/%d, want 0/2", len(h.Matches), len(h.Tickets))
+	}
+	if ticket == nil || ticket.Character != "" || len(ticket.Endpoints) != 0 || len(ticket.LocalIPs) != 0 || len(ticket.LocalEndpoints) != 0 {
+		t.Fatalf("retained report ticket still contains matchmaking metadata: %#v", ticket)
+	}
+	h.Mu.Unlock()
+
+	target := "/0.9.5/matchmaking/default/TicketA/45860/report"
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
+	if rec.Code != http.StatusNoContent || rec.Header().Get(antistaticReportIDHeader) == "" {
+		t.Fatalf("retained runtime report status/header = %d/%q", rec.Code, rec.Header().Get(antistaticReportIDHeader))
+	}
+
+	h.Mu.Lock()
+	for _, retained := range h.Tickets {
+		retained.CheckedIn = now.Add(-matchmakingReportRetention - time.Second)
+	}
+	h.cleanupMatchmakingLocked(now)
+	remaining := len(h.Tickets)
+	h.Mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("report retention cleanup left %d tickets, want 0", remaining)
 	}
 }
 
