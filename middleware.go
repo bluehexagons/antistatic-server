@@ -89,7 +89,7 @@ func securityHeaders(next http.Handler) http.Handler {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'")
 		}
 
-		if r.Method == "OPTIONS" && !adminRequest {
+		if r.Method == "OPTIONS" && !adminRequest && !isIngestionPath(r.URL.Path) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -310,9 +310,9 @@ func getClientIP(r *http.Request) string {
 
 	if trustProxy && isTrustedProxy(remote) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			ip := xff
-			if idx := strings.Index(xff, ","); idx != -1 {
-				ip = strings.TrimSpace(xff[:idx])
+			ip := strings.TrimSpace(xff)
+			if strings.Contains(ip, ",") {
+				return remote
 			}
 			if parsed := net.ParseIP(ip); parsed != nil {
 				return parsed.String()
@@ -321,10 +321,12 @@ func getClientIP(r *http.Request) string {
 		}
 
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			if parsed := net.ParseIP(xri); parsed != nil {
-				return parsed.String()
+			if !strings.Contains(xri, ",") {
+				if parsed := net.ParseIP(strings.TrimSpace(xri)); parsed != nil {
+					return parsed.String()
+				}
 			}
-			return ""
+			return remote
 		}
 	}
 

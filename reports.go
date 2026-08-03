@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"mime"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -177,15 +178,31 @@ func writeIngestError(w http.ResponseWriter, status int) {
 		message = "Request body too large"
 	case http.StatusServiceUnavailable:
 		message = "Report storage unavailable"
+	case http.StatusUpgradeRequired:
+		message = "Report endpoints require HTTPS"
+	case http.StatusTooManyRequests:
+		message = "Report rate limit exceeded"
 	}
 	http.Error(w, message, status)
 }
 
 type reportAPI struct {
-	store *reportStore
+	store   *reportStore
+	limiter *rateLimiter
 }
 
 func (api reportAPI) validateVersion(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if !requestIsHTTPS(r) {
+		clientIP := net.ParseIP(getClientIP(r))
+		if clientIP == nil || !clientIP.IsLoopback() {
+			writeIngestError(w, http.StatusUpgradeRequired)
+			return "", false
+		}
+	}
+	if api.limiter != nil && !api.limiter.allow(getClientIP(r)+"|"+r.URL.Path) {
+		writeIngestError(w, http.StatusTooManyRequests)
+		return "", false
+	}
 	version := r.PathValue("version")
 	if !validateVersion(version) {
 		writeIngestError(w, http.StatusBadRequest)

@@ -179,6 +179,10 @@ func main() {
 		tlsPort = 443
 	}
 	useTLS = tlsPort > 0
+	if config.AdminUsername != "" && !noHTTP && !trustProxy {
+		slog.Error("Admin credentials require -nohttp or a trusted TLS-terminating proxy")
+		os.Exit(2)
+	}
 
 	if autocertDomain != "" && useTLS {
 		slog.Warn("Both autocert and manual TLS are enabled; disabling manual TLS in favor of autocert")

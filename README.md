@@ -19,6 +19,9 @@ Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 
 ## Basic use
 By default, running `antistatic-server` will run on port 80 without enabling HTTPS.
+This is suitable only for public health/events and local development. Report
+endpoints require HTTPS (except loopback development requests), and deployments
+with admin credentials must use `-nohttp` or a trusted TLS-terminating proxy.
 
 Run with `antistatic-server -help` to view all command line options.
 
@@ -144,8 +147,14 @@ current v1 schema, `{version}` identifies the sending client's current API/game
 compatibility. Feedback and metric records store that URL version. Crash
 records instead store their required `app_version` field because a crash may
 have been queued before the client upgraded and submitted it.
+Report endpoints require HTTPS for non-loopback clients and allow at most 20
+requests initially, refilling at 10 requests per minute per client IP and
+report path. They do not enable CORS; desktop clients send requests directly.
 Every `event_id` must be a fresh random 16-80 character identifier containing
 only letters, digits, `_`, and `-`; it exists only to make retries idempotent.
+The raw client value is never persisted. While the process is running, the
+store uses a process-keyed opaque digest for in-memory retry handling; retries
+after a server restart may create a second record.
 
 Crash reports accept:
 

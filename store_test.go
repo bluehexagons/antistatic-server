@@ -71,11 +71,11 @@ func TestReportStorePersistsDeduplicatesAndSecuresFiles(t *testing.T) {
 		t.Fatalf("reopen report store: %v", err)
 	}
 	persistedID, duplicate, err := reopened.appendCrash(request)
-	if err != nil || !duplicate || persistedID != id {
-		t.Fatalf("persisted dedupe = %q, %v, %v, want %q, true, nil", persistedID, duplicate, err, id)
+	if err != nil || duplicate || persistedID == id {
+		t.Fatalf("persisted dedupe = %q, %v, %v, want a new ID after restart", persistedID, duplicate, err)
 	}
 	records, err := reopened.crashes()
-	if err != nil || len(records) != 1 || records[0].ID != id {
+	if err != nil || len(records) != 2 || records[0].ID != id || records[1].ID != persistedID {
 		t.Fatalf("persisted records = %#v, %v", records, err)
 	}
 	if !records[0].ServerTime.Equal(records[0].ServerTime.Truncate(storeTimePrecision)) {
@@ -107,7 +107,7 @@ func TestReportStoreSkipsMalformedTail(t *testing.T) {
 		t.Fatalf("malformed tail prevented reopen: %v", err)
 	}
 	records, err := reopened.crashes()
-	if err != nil || len(records) != 1 || records[0].EventID != "random-event-id-0002" {
+	if err != nil || len(records) != 1 || len(records[0].EventID) != 64 {
 		t.Fatalf("records after malformed tail = %#v, %v", records, err)
 	}
 }

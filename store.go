@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -162,6 +163,8 @@ type reportStore struct {
 	netplayWG      sync.WaitGroup
 	closeOnce      sync.Once
 	openAppend     func(string) (appendFile, error)
+	eventDigestKey [32]byte
+	eventDigests   map[storeCollection]map[string]string
 	now            func() time.Time
 }
 
@@ -186,10 +189,15 @@ func newReportStore(root string) (*reportStore, error) {
 		openAppend: func(path string) (appendFile, error) {
 			return os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 		},
-		now: time.Now,
+		eventDigests: make(map[storeCollection]map[string]string),
+		now:          time.Now,
+	}
+	if _, err := rand.Read(store.eventDigestKey[:]); err != nil {
+		return nil, fmt.Errorf("generate event digest key: %w", err)
 	}
 	for _, collection := range storeCollections {
 		store.dedupe[collection] = make(map[string]dedupeEntry)
+		store.eventDigests[collection] = make(map[string]string)
 		file, err := os.OpenFile(store.collectionPath(collection), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			return nil, fmt.Errorf("create %s collection: %w", collection, err)
@@ -236,8 +244,41 @@ func (s *reportStore) deduplicatedLocked(collection storeCollection, eventID str
 	return entry.ID, true
 }
 
+func (s *reportStore) eventDigest(collection storeCollection, eventID string) string {
+	value := sha256.Sum256(append(append([]byte(string(collection)), s.eventDigestKey[:]...), []byte(eventID)...))
+	digest := hex.EncodeToString(value[:])
+	s.eventDigests[collection][digest] = eventID
+	return digest
+}
+
+func (s *reportStore) recordForStorage(collection storeCollection, record any) any {
+	switch value := record.(type) {
+	case crashRecord:
+		value.EventID = s.eventDigest(collection, value.EventID)
+		return value
+	case feedbackRecord:
+		value.EventID = s.eventDigest(collection, value.EventID)
+		return value
+	case gameplayRecord:
+		value.EventID = s.eventDigest(collection, value.EventID)
+		return value
+	case performanceRecord:
+		value.EventID = s.eventDigest(collection, value.EventID)
+		return value
+	default:
+		return record
+	}
+}
+
+func (s *reportStore) restoreEventID(collection storeCollection, eventID string) string {
+	if value, ok := s.eventDigests[collection][eventID]; ok {
+		return value
+	}
+	return eventID
+}
+
 func (s *reportStore) appendJSONLocked(collection storeCollection, record any) error {
-	line, err := json.Marshal(record)
+	line, err := json.Marshal(s.recordForStorage(collection, record))
 	if err != nil {
 		return err
 	}
@@ -536,6 +577,16 @@ func scanRecordsLocked[T any](s *reportStore, collection storeCollection, record
 		}
 		var record T
 		if !oversized && len(line) > 0 && json.Unmarshal(line, &record) == nil {
+			switch value := any(&record).(type) {
+			case *crashRecord:
+				value.EventID = s.restoreEventID(collection, value.EventID)
+			case *feedbackRecord:
+				value.EventID = s.restoreEventID(collection, value.EventID)
+			case *gameplayRecord:
+				value.EventID = s.restoreEventID(collection, value.EventID)
+			case *performanceRecord:
+				value.EventID = s.restoreEventID(collection, value.EventID)
+			}
 			recordedAt := recordTime(record)
 			if !recordedAt.IsZero() && !recordedAt.Before(cutoff) && !recordedAt.After(now.Add(storeTimePrecision)) {
 				visit(record)

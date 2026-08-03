@@ -1,12 +1,14 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func reportTestHandler(t *testing.T, store *reportStore) http.Handler {
@@ -23,6 +25,7 @@ func postJSON(target, body string) *http.Request {
 	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "198.51.100.10:1234"
+	request.TLS = &tls.ConnectionState{}
 	return request
 }
 
@@ -122,6 +125,8 @@ func TestReportEndpointsEnforceStrictJSONAndPrivacyBoundary(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/1.2.3/reports/feedback", strings.NewReader(test.body))
 			request.Header.Set("Content-Type", test.contentType)
+			request.RemoteAddr = "198.51.100.10:1234"
+			request.TLS = &tls.ConnectionState{}
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
@@ -186,5 +191,44 @@ func TestReportEndpointValidationAndUnavailableStorage(t *testing.T) {
 	handler.ServeHTTP(recorder, postJSON("/1.2.3/metrics/performance", invalidPerformance))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("invalid percentile status = %d, want 400", recorder.Code)
+	}
+}
+
+func TestReportEndpointsRequireHTTPS(t *testing.T) {
+	store, err := newReportStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := postJSON("/1.2.3/reports/crash", `{}`)
+	request.TLS = nil
+	recorder := httptest.NewRecorder()
+	api := reportAPI{store: store}
+	request.SetPathValue("version", "1.2.3")
+	api.crash(recorder, request)
+	if recorder.Code != http.StatusUpgradeRequired {
+		t.Fatalf("plain HTTP report status = %d, want 426", recorder.Code)
+	}
+}
+
+func TestReportEndpointsRateLimitByClientAndPath(t *testing.T) {
+	store, err := newReportStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	limiter := newRateLimiter(1, 1, time.Minute)
+	defer limiter.Stop()
+	api := reportAPI{store: store, limiter: limiter}
+	for i, eventID := range []string{"random-event-id-4001", "random-event-id-4002"} {
+		request := postJSON("/1.2.3/reports/crash", `{"event_id":"`+eventID+`","app_version":"1.2.3","platform":"linux","arch":"amd64","reason_code":"segfault","symbols":[]}`)
+		request.SetPathValue("version", "1.2.3")
+		recorder := httptest.NewRecorder()
+		api.crash(recorder, request)
+		want := http.StatusCreated
+		if i == 1 {
+			want = http.StatusTooManyRequests
+		}
+		if recorder.Code != want {
+			t.Fatalf("request %d status = %d, want %d: %s", i, recorder.Code, want, recorder.Body.String())
+		}
 	}
 }

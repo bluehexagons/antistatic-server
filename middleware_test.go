@@ -25,7 +25,7 @@ func TestGetClientIP(t *testing.T) {
 	}{
 		{"192.168.1.1:12345", map[string]string{}, "192.168.1.1"},
 		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.1"}, "203.0.113.1"},
-		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.1, 198.51.100.1"}, "203.0.113.1"},
+		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.1, 198.51.100.1"}, "10.0.0.1"},
 		{"10.0.0.1:12345", map[string]string{"X-Real-IP": "203.0.113.5"}, "203.0.113.5"},
 	}
 

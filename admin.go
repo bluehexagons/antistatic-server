@@ -88,6 +88,9 @@ func newAdminHandler(store *reportStore, username, password string) http.Handler
 func (admin *adminServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	if requestIsHTTPS(r) {
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	}
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'")
 	if !requestIsHTTPS(r) {
 		http.Error(w, "Admin requires HTTPS", http.StatusBadRequest)

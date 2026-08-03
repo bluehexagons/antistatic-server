@@ -387,6 +387,7 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	handler.Metrics.recordLobbyCreated()
 	handler.Metrics.recordSuccessfulMatch()
 	handler.Metrics.recordError("test error", http.StatusBadRequest)
+	handler.Metrics.recordGameErrorWithReportID("match failed", "nr-0123456789abcdef")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -402,6 +403,9 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	}
 	if resp.Version != serverVersion {
 		t.Fatalf("health version = %q, want %q", resp.Version, serverVersion)
+	}
+	if strings.Contains(rec.Body.String(), "nr-0123456789abcdef") {
+		t.Fatal("public health JSON must not expose report IDs")
 	}
 }
 

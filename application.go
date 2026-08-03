@@ -43,7 +43,7 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (http.
 	if config.Store != nil {
 		lobby.LastStoreCompaction = time.Now()
 	}
-	api := reportAPI{store: config.Store}
+	api := reportAPI{store: config.Store, limiter: newRateLimiter(10, 20, time.Minute)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { serveHealth(lobby, w, r) })
 	mux.HandleFunc("/health.html", func(w http.ResponseWriter, r *http.Request) { serveHealthHTML(lobby, w, r) })

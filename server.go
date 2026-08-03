@@ -56,7 +56,7 @@ type recentError struct {
 type recentGameError struct {
 	Time     time.Time `json:"time"`
 	Code     string    `json:"code"`
-	ReportID string    `json:"report_id,omitempty"`
+	ReportID string    `json:"-"`
 }
 
 type activityBucket struct {
