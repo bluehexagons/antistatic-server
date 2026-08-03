@@ -155,6 +155,29 @@ func TestSecurityHeadersOptions(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersOmitCORSForIngestionRoutes(t *testing.T) {
+	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, path := range []string{
+		"/1.0/reports/crash",
+		"/1.0/reports/feedback",
+		"/1.0/metrics/gameplay",
+		"/1.0/metrics/performance",
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
+		if recorder.Header().Get("Access-Control-Allow-Origin") != "" || recorder.Header().Get("Access-Control-Expose-Headers") != "" {
+			t.Fatalf("ingestion route %s exposed CORS headers: %#v", path, recorder.Header())
+		}
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/1.0/lobby/ABC/1234", nil))
+	if recorder.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("lobby CORS origin = %q, want wildcard preserved", recorder.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
 func TestRequestIDMiddleware(t *testing.T) {
 	handler := requestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if getRequestID(r) == "" {

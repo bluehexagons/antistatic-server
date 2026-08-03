@@ -40,13 +40,17 @@ var stunHost = ""
 var stunPort = 0
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	serveHealth(handler, w, r)
+}
+
+func serveHealth(lobby *lobbyHandler, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(handler.healthResponse()); err != nil {
+	if err := json.NewEncoder(w).Encode(lobby.healthResponse()); err != nil {
 		slog.Error("Health JSON response failed", "error", err)
 	}
 }
@@ -109,13 +113,17 @@ var healthHTMLTemplate = template.Must(template.New("health").Parse(`<!doctype h
 </html>`))
 
 func healthHTMLHandler(w http.ResponseWriter, r *http.Request) {
+	serveHealthHTML(handler, w, r)
+}
+
+func serveHealthHTML(lobby *lobbyHandler, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := healthHTMLTemplate.Execute(w, handler.healthResponse()); err != nil {
+	if err := healthHTMLTemplate.Execute(w, lobby.healthResponse()); err != nil {
 		slog.Error("Health HTML response failed", "error", err)
 	}
 }
@@ -156,6 +164,16 @@ func main() {
 		slog.Error("Invalid trusted proxy CIDRs", "error", err)
 		os.Exit(2)
 	}
+	config, err := applicationConfigFromEnv()
+	if err != nil {
+		slog.Error("Invalid application configuration", "error", err)
+		os.Exit(2)
+	}
+	applicationHandler, err := newApplicationHandler(config, handler)
+	if err != nil {
+		slog.Error("Failed to construct application handler", "error", err)
+		os.Exit(2)
+	}
 
 	if tlsPort <= 0 && useTLS {
 		tlsPort = 443
@@ -172,11 +190,7 @@ func main() {
 
 	var wg sync.WaitGroup
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/health.html", healthHTMLHandler)
-	mux.HandleFunc("/events", eventsHandler)
-	mux.HandleFunc("/robots.txt", robotsHandler)
-	mux.Handle("/", handler)
+	mux.Handle("/", applicationHandler)
 
 	var mgr *autocert.Manager
 	if autocertDomain != "" {
@@ -339,6 +353,9 @@ func main() {
 	}
 
 	handler.Stop()
+	if config.Store != nil {
+		config.Store.Close()
+	}
 	wg.Wait()
 	slog.Info("Server stopped gracefully")
 }

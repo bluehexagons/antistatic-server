@@ -1007,8 +1007,12 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, v
 	eventIndex := gameReportEventIndex(report.Event)
 	bit := uint8(1 << eventIndex)
 	if t.reportedEvents&bit != 0 {
-		w.Header().Set(antistaticReportIDHeader, t.reportIDs[eventIndex])
+		reportID := t.reportIDs[eventIndex]
 		h.Mu.Unlock()
+		w.Header().Set(antistaticReportIDHeader, reportID)
+		if h.Store != nil {
+			h.Store.enqueueNetplay(reportID, version, report.Event)
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -1019,6 +1023,9 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, v
 	h.Mu.Unlock()
 
 	w.Header().Set(antistaticReportIDHeader, reportID)
+	if h.Store != nil {
+		h.Store.enqueueNetplay(reportID, version, report.Event)
+	}
 	if report.Event != "match_connected" {
 		h.Metrics.recordGameErrorWithReportID(report.Event, reportID)
 	}

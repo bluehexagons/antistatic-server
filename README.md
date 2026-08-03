@@ -14,6 +14,8 @@ Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 - Bounded in-memory lobby, matchmaking, and rate-limit state
 - Docker support
 - JSON and HTML health views with privacy-preserving lobby and matchmaking statistics
+- Privacy-bounded crash, feedback, gameplay, performance, and netplay report storage
+- TLS-only authenticated report administration
 
 ## Basic use
 By default, running `antistatic-server` will run on port 80 without enabling HTTPS.
@@ -60,8 +62,22 @@ To keep memory and CPU bounded under abusive traffic, the server enforces fixed 
 | Active matchmaking matches | 10,000 |
 | Match-by-code tag leases | 20,000 |
 | Match-by-code tag leases per client IP | 8 |
+| Report collection file | 64 MiB |
+| Retained records per collection | 10,000 |
 
 When a capacity limit is reached, new state-creating requests return `503 Service Unavailable`; existing tickets and lobby members can continue to refresh until they expire or are deleted.
+
+### Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `ANTISTATIC_DATA_DIR` | Directory for the append-only report JSON Lines files. When unset, collection endpoints return 503. |
+| `ANTISTATIC_ADMIN_USERNAME` | HTTP Basic username for `/admin/`. Must be set with the password. |
+| `ANTISTATIC_ADMIN_PASSWORD` | HTTP Basic password for `/admin/`. Must be set with the username. |
+
+If exactly one admin credential is set, startup fails. If both are unset, admin
+routes are not registered and return 404. Admin pages can still be enabled when
+the data directory is unset; they show storage as unavailable.
 
 ### Examples
 * `antistatic-server -tls -cert /etc/tls/server.crt -key /etc/tls/server.key` - Custom cert/key locations
@@ -115,6 +131,151 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 | `GET` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Poll matchmaking ticket status |
 | `DELETE` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Cancel a matchmaking ticket |
 | `POST` | `/{version}/matchmaking/{queue}/{ticket}/{port}/report` | Submit an authenticated coarse game-failure report |
+| `POST` | `/{version}/reports/crash` | Submit a v1 crash report |
+| `POST` | `/{version}/reports/feedback` | Submit v1 feedback |
+| `POST` | `/{version}/metrics/gameplay` | Submit a v1 coarse gameplay sample |
+| `POST` | `/{version}/metrics/performance` | Submit a v1 coarse performance sample |
+
+### Report collection API
+
+Report collection requires `Content-Type: application/json`, rejects unknown
+fields and trailing JSON, and uses the global 10 KiB request limit. In the
+current v1 schema, `{version}` identifies the sending client's current API/game
+compatibility. Feedback and metric records store that URL version. Crash
+records instead store their required `app_version` field because a crash may
+have been queued before the client upgraded and submitted it.
+Every `event_id` must be a fresh random 16-80 character identifier containing
+only letters, digits, `_`, and `-`; it exists only to make retries idempotent.
+
+Crash reports accept:
+
+```json
+{
+  "event_id": "random-retry-id-0001",
+  "app_version": "0.9.5",
+  "platform": "linux",
+  "arch": "amd64",
+  "reason_code": "segfault",
+  "symbols": ["game::update", "engine_main"]
+}
+```
+
+`app_version` is required and uses the same bounded version format as the URL.
+It identifies the version that generated the crash, which may differ from the
+submitting client's URL version. `platform` is `windows`, `linux`, `macos`,
+`steamdeck`, or `unknown`. `arch` and `reason_code` are bounded identifiers. `symbols` is required, has at most
+48 entries of at most 120 identifier-like characters each, and rejects paths.
+The response is `201` with `{"report_id":"cr-..."}` and the same value in
+`X-Antistatic-Report-ID`. A duplicate event ID returns the original ID.
+
+Feedback accepts:
+
+```json
+{
+  "event_id": "random-retry-id-0002",
+  "category": "bug",
+  "subject": "Short summary",
+  "body": "Description without logs, paths, addresses, or credentials.",
+  "related_report_id": "cr-0123456789abcdef"
+}
+```
+
+`category` is `bug`, `feedback`, or `other`; subject and body are limited to
+120 and 6,000 characters. `related_report_id` is optional and accepts a server
+crash, feedback, or netplay report ID. Feedback returns the same 201 response
+and retry behavior as crash reports.
+
+Gameplay metrics accept:
+
+```json
+{
+  "event_id": "random-retry-id-0003",
+  "mode": "versus",
+  "stage": "arena",
+  "character": "carbon",
+  "opponent_character": "silicon",
+  "online": true,
+  "completed": true,
+  "duration_frames": 3600,
+  "local_players": 1,
+  "cpu_players": 0,
+  "result": "win"
+}
+```
+
+The four names are bounded identifiers. Player counts are 0-8, duration is
+0-10,000,000 frames, and result is `win`, `loss`, `draw`, `unknown`, or `quit`.
+
+Performance metrics accept:
+
+```json
+{
+  "event_id": "random-retry-id-0004",
+  "platform": "linux",
+  "arch": "amd64",
+  "renderer_family": "vulkan",
+  "gpu_vendor": "amd",
+  "memory_gib_bucket": "16-31",
+  "cpu_cores_bucket": "9-16",
+  "resolution_bucket": "1440p",
+  "sample_frames": 600,
+  "frame_ms_avg": 8.4,
+  "frame_ms_p95": 12.1
+}
+```
+
+Renderer families are `opengl`, `vulkan`, `metal`, `direct3d11`,
+`direct3d12`, `webgl`, `other`, or `unknown`. GPU vendors are `amd`, `intel`,
+`nvidia`, `apple`, `qualcomm`, `arm`, `imagination`, `other`, or `unknown`.
+Memory buckets are `under-4`, `4-7`, `8-15`, `16-31`, `32-63`, `64-plus`, or
+`unknown`; CPU buckets are `1-2`, `3-4`, `5-8`, `9-16`, `17-plus`, or
+`unknown`; resolution buckets are `720p-or-less`, `1080p`, `1440p`,
+`2160p-or-more`, `other`, or `unknown`. Frame values must be finite, positive,
+at most 1,000 ms, and p95 must not be below the average. Both metric endpoints
+return 204 and deduplicate event IDs within retention.
+
+### Report storage and administration
+
+`ANTISTATIC_DATA_DIR` contains separate `crash.jsonl`, `feedback.jsonl`,
+`gameplay.jsonl`, `performance.jsonl`, and `netplay.jsonl` append-only files.
+The directory is mode 0700 and files are mode 0600. Writes are serialized and
+synced. Startup and daily maintenance compaction safely drop malformed records
+and expired data; readers also tolerate an incomplete final line. Crash and coarse netplay
+reports are retained 90 days, feedback 365 days, and metrics 30 days.
+
+Records contain only a random server report ID, a server time rounded to 15
+minutes, app version, and the documented typed fields. The store never adds
+client IPs, user agents, authorization headers, tokens, network endpoints,
+request paths or payloads, client timestamps, install/session identifiers,
+raw logs, or arbitrary metadata. Clients must not put those values into
+feedback text. Authenticated netplay reports persist only report ID, version,
+coarse event code, and rounded server time; a persistence failure does not
+change matchmaking or its response. Netplay persistence uses a bounded
+64-record best-effort queue so disk I/O never delays the report response. Each
+queued record gets at most two write attempts with a short fixed backoff. A
+duplicate received while an ID is pending shares that bounded retry; after a
+final failure, a later duplicate can enqueue the same stable report ID again.
+A full queue drops that persistence attempt, and already-persisted IDs are not
+written twice. Ordinary shutdown drains records that were accepted into the
+queue before closing the store.
+
+The dependency-free admin UI is under `/admin/` and includes crash and
+feedback details plus gameplay, performance, and netplay views. Every admin
+resource, including `/admin/style.css`, requires HTTP Basic authentication over
+TLS. `X-Forwarded-Proto: https` is accepted only when `-trust-proxy` is enabled
+and the immediate peer is in `-trusted-proxy-cidrs`. Do not expose Basic auth
+over plain HTTP. A reverse proxy must overwrite, not append or pass through,
+`X-Forwarded-Proto` from the client and set it from the proxy's own TLS state.
+When the server exposes its TLS listener directly and admin auth is enabled,
+also pass `-nohttp`; the application cannot prevent a browser from
+preemptively sending cached Basic credentials to a separately published plain
+HTTP listener.
+
+For backups, snapshot or copy the data volume. A copy made during a write may
+end with a partial JSON line, which restore reads safely ignore; a stopped
+server or filesystem/volume snapshot gives a fully consistent set. Preserve
+0700 directory and 0600 file permissions after restore. Backups contain user
+feedback and should be encrypted and access-controlled.
 
 Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header. The first successful `PUT` for a lobby member or matchmaking ticket returns a `token`; clients must send that token in `X-Antistatic-Token` when refreshing, polling, deleting, or reporting on the same member/ticket. Tokens are bearer credentials and should not be logged or shared.
 
@@ -363,8 +524,11 @@ and adding/changing the `server` property there. This config is loaded when the 
 ## Logging
 The server uses structured JSON logging via `log/slog`. Example log output:
 ```json
-{"time":"2026-04-27T09:17:56.123Z","level":"INFO","msg":"Lobby request","requestID":"abc123","method":"PUT","ip":"198.51.100.10","port":45860,"key":"ABC123","version":"0.9.5"}
+{"time":"2026-04-27T09:17:56.123Z","level":"INFO","msg":"Lobby request","requestID":"abc123","method":"PUT","version":"0.9.5"}
 ```
+
+Request logs deliberately omit addresses, tokens, lobby/ticket identifiers,
+request bodies, and report contents.
 
 ## Docker
 Build and run with Docker:
@@ -373,13 +537,25 @@ docker build -t antistatic-server .
 docker run -p 80:80 -p 443:443 antistatic-server
 ```
 
+Persist reports and enable the TLS-only admin UI with a mounted data volume:
+
+```bash
+docker run -p 443:443 \
+  -v antistatic-data:/data \
+  -e ANTISTATIC_DATA_DIR=/data \
+  -e ANTISTATIC_ADMIN_USERNAME=operator \
+  -e ANTISTATIC_ADMIN_PASSWORD='replace-with-a-long-secret' \
+  -v /host/tls:/tls:ro \
+  antistatic-server -tls -nohttp -cert /tls/server.crt -key /tls/server.key
+```
+
 For automatic TLS, publish both ACME/HTTP and HTTPS and persist the certificate cache:
 ```bash
 docker run -p 80:80 -p 443:443 -v antistatic-certs:/certs antistatic-server -autocert example.com -autocert-cache /certs
 ```
 
 ## Building
-Requires Go 1.24 or later.
+Requires Go 1.25 or later.
 
 ```bash
 go build -o antistatic-server .

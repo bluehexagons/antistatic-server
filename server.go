@@ -300,18 +300,21 @@ func (m *serverMetrics) snapshotActivity(now time.Time) activitySummary {
 }
 
 type lobbyHandler struct {
-	Mu        sync.RWMutex
-	Lobbies   map[string]*Lobby
-	Tickets   map[string]*MatchmakingTicket
-	Waiting   map[string]map[string]*MatchmakingTicket
-	Matches   map[string]*Match
-	Queues    map[string]*MatchmakingQueue
-	TagLeases map[string]*MatchmakingTagLease
-	Metrics   serverMetrics
-	Ticker    *time.Ticker
-	Done      chan struct{}
-	Once      sync.Once
-	StopOnce  sync.Once
+	Mu                  sync.RWMutex
+	Lobbies             map[string]*Lobby
+	Tickets             map[string]*MatchmakingTicket
+	Waiting             map[string]map[string]*MatchmakingTicket
+	Matches             map[string]*Match
+	Queues              map[string]*MatchmakingQueue
+	TagLeases           map[string]*MatchmakingTagLease
+	Metrics             serverMetrics
+	Ticker              *time.Ticker
+	Done                chan struct{}
+	Once                sync.Once
+	StopOnce            sync.Once
+	MaintainWG          sync.WaitGroup
+	Store               *reportStore
+	LastStoreCompaction time.Time
 }
 
 type healthResponse struct {
@@ -384,28 +387,42 @@ func (h *lobbyHandler) Maintain() {
 		maintenance := time.NewTicker(tickInterval)
 		h.Ticker = maintenance
 		h.Done = make(chan struct{})
+		h.MaintainWG.Add(1)
 		go func() {
+			defer h.MaintainWG.Done()
 			defer maintenance.Stop()
 			for {
 				select {
 				case <-h.Done:
 					return
 				case <-maintenance.C:
-					now := time.Now()
-					h.Mu.Lock()
-					for k, l := range h.Lobbies {
-						l.Clean()
-						if len(l.Members) == 0 {
-							delete(h.Lobbies, k)
-							slog.Info("Lobby emptied (timeout)")
-						}
-					}
-					h.cleanupMatchmakingLocked(now)
-					h.Mu.Unlock()
+					h.maintainAt(time.Now())
 				}
 			}
 		}()
 	})
+}
+
+func (h *lobbyHandler) maintainAt(now time.Time) {
+	h.Mu.Lock()
+	for k, l := range h.Lobbies {
+		l.Clean()
+		if len(l.Members) == 0 {
+			delete(h.Lobbies, k)
+			slog.Info("Lobby emptied (timeout)")
+		}
+	}
+	h.cleanupMatchmakingLocked(now)
+	h.Mu.Unlock()
+
+	if h.Store == nil || (!h.LastStoreCompaction.IsZero() && now.Sub(h.LastStoreCompaction) < storeCompactionInterval) {
+		return
+	}
+	if err := h.Store.Compact(now); err != nil {
+		slog.Error("Periodic report compaction failed", "error", err)
+		return
+	}
+	h.LastStoreCompaction = now
 }
 
 func (h *lobbyHandler) Stop() {
@@ -414,6 +431,7 @@ func (h *lobbyHandler) Stop() {
 			close(h.Done)
 		}
 	})
+	h.MaintainWG.Wait()
 }
 
 type lobbyResponse struct {
@@ -629,6 +647,7 @@ var handler = &lobbyHandler{
 }
 
 const tickInterval = 5 * time.Minute
+const storeCompactionInterval = 24 * time.Hour
 
 // lobbyCheckInBody is the optional JSON payload accepted on lobby PUT requests.
 // All fields are optional so older clients (and the matchmaking flow that

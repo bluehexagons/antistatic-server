@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -166,6 +168,122 @@ func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
 	if got := h.Metrics.gameErrors.Load(); got != 2 {
 		t.Fatalf("authorized sim report plus invalid reports changed game error count to %d", got)
 	}
+}
+
+func TestNetplayReportPersistenceAndFailureIsolation(t *testing.T) {
+	store, err := newReportStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	h := newTestLobbyHandler()
+	h.Store = store
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	firstResponse := decodeMatchmakingResponse(t, first)
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	if second.Code != http.StatusOK || decodeMatchmakingResponse(t, second).Status != "matched" {
+		t.Fatalf("second ticket did not match: %d %s", second.Code, second.Body.String())
+	}
+	target := "/0.9.5/matchmaking/default/TicketA/45860/report"
+	openNormally := store.openAppend
+	writeStarted := make(chan struct{})
+	writeRelease := make(chan struct{})
+	store.mu.Lock()
+	store.openAppend = func(path string) (appendFile, error) {
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		return &faultAppendFile{File: file, write: func(payload []byte) (int, error) {
+			close(writeStarted)
+			<-writeRelease
+			return file.Write(payload)
+		}}, nil
+	}
+	store.mu.Unlock()
+	recorder := serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connect_failed"}, firstResponse.Token)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("persisted netplay report status = %d", recorder.Code)
+	}
+	select {
+	case <-writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("netplay worker did not start blocked persistence")
+	}
+	close(writeRelease)
+	waitForTestCondition(t, func() bool {
+		records, err := store.netplay()
+		return err == nil && len(records) == 1
+	})
+	store.mu.Lock()
+	store.openAppend = openNormally
+	store.mu.Unlock()
+	records, err := store.netplay()
+	if err != nil || records[0].ID != recorder.Header().Get(antistaticReportIDHeader) || records[0].AppVersion != "0.9.5" || records[0].Event != "match_connect_failed" {
+		t.Fatalf("persisted netplay records = %#v, %v", records, err)
+	}
+
+	store.mu.Lock()
+	store.openAppend = func(path string) (appendFile, error) {
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		return &faultAppendFile{File: file, write: func([]byte) (int, error) {
+			return 0, errors.New("injected netplay persistence failure")
+		}}, nil
+	}
+	store.mu.Unlock()
+	recorder = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
+	if recorder.Code != http.StatusNoContent || recorder.Header().Get(antistaticReportIDHeader) == "" {
+		t.Fatalf("storage failure changed report response = %d / %q", recorder.Code, recorder.Header().Get(antistaticReportIDHeader))
+	}
+	runtimeReportID := recorder.Header().Get(antistaticReportIDHeader)
+	waitForTestCondition(t, func() bool {
+		store.netplayMu.Lock()
+		defer store.netplayMu.Unlock()
+		_, pending := store.netplayPending[runtimeReportID]
+		return !pending
+	})
+	h.Mu.RLock()
+	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
+	recorded := ticket != nil && ticket.reportedEvents&uint8(1<<gameReportEventIndex("match_runtime_error")) != 0
+	h.Mu.RUnlock()
+	if !recorded {
+		t.Fatal("storage failure rolled back accepted netplay report state")
+	}
+
+	store.mu.Lock()
+	store.openAppend = openNormally
+	store.mu.Unlock()
+	recorder = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
+	if recorder.Code != http.StatusNoContent || recorder.Header().Get(antistaticReportIDHeader) != runtimeReportID {
+		t.Fatalf("duplicate retry response = %d / %q, want stable %q", recorder.Code, recorder.Header().Get(antistaticReportIDHeader), runtimeReportID)
+	}
+	waitForTestCondition(t, func() bool {
+		records, err := store.netplay()
+		return err == nil && len(records) == 2
+	})
+	recorder = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("persisted duplicate status = %d", recorder.Code)
+	}
+	records, err = store.netplay()
+	if err != nil || len(records) != 2 {
+		t.Fatalf("persisted duplicate created extra records: %#v, %v", records, err)
+	}
+}
+
+func waitForTestCondition(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for asynchronous condition")
 }
 
 func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
