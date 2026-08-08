@@ -485,6 +485,9 @@ its bearer credential, and report deduplication state for 20 minutes so
 failures later in a normal match remain reportable. The health log stores only
 the fixed event, report ID, and coarse time; it does not store request paths,
 addresses, queue, character, free-form text, or stack traces.
+Polling a canceled or expired retained ticket returns `status:"canceled"` with
+an empty `endpoints` array; its bearer token remains valid only for the
+authenticated report endpoint until the 20-minute retention deadline.
 `match_connected` should be sent once the game connection/handshake is usable.
 Runtime diagnostic events are tracked separately and do not count as
 connection failures.

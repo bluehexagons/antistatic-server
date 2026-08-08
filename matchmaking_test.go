@@ -315,9 +315,20 @@ func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 	h.Mu.Unlock()
 
 	target := "/0.9.5/matchmaking/default/TicketA/45860/report"
+	state := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, firstResponse.Token)
+	if state.Code != http.StatusOK || decodeMatchmakingResponse(t, state).Status != "canceled" {
+		t.Fatalf("retained ticket poll = %d/%s, want canceled", state.Code, state.Body.String())
+	}
 	rec := serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
 	if rec.Code != http.StatusNoContent || rec.Header().Get(antistaticReportIDHeader) == "" {
 		t.Fatalf("retained runtime report status/header = %d/%q", rec.Code, rec.Header().Get(antistaticReportIDHeader))
+	}
+	h.Mu.Lock()
+	h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")].CheckedIn = now.Add(-matchmakingReportRetention - time.Second)
+	h.Mu.Unlock()
+	expired := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, firstResponse.Token)
+	if expired.Code != http.StatusNotFound {
+		t.Fatalf("expired report poll returned %d, want %d", expired.Code, http.StatusNotFound)
 	}
 
 	h.Mu.Lock()
@@ -329,6 +340,41 @@ func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 	h.Mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("report retention cleanup left %d tickets, want 0", remaining)
+	}
+}
+
+func TestMatchedTicketRefreshDoesNotExtendReportRetention(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	firstResponse := decodeMatchmakingResponse(t, first)
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	if second.Code != http.StatusOK {
+		t.Fatalf("second ticket did not match: status=%d body=%s", second.Code, second.Body.String())
+	}
+
+	oldCheckIn := time.Now().Add(-matchmakingReportRetention - time.Second)
+	h.Mu.Lock()
+	key := matchmakingTicketKey("0.9.5", "default", "TicketA")
+	h.Tickets[key].CheckedIn = oldCheckIn
+	h.Mu.Unlock()
+
+	refresh := serveMatchmakingRequestWithToken(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		firstResponse.Token,
+	)
+	if refresh.Code != http.StatusOK {
+		t.Fatalf("matched refresh returned %d, want %d: %s", refresh.Code, http.StatusOK, refresh.Body.String())
+	}
+
+	h.Mu.RLock()
+	checkIn := h.Tickets[key].CheckedIn
+	h.Mu.RUnlock()
+	if !checkIn.Equal(oldCheckIn) {
+		t.Fatalf("matched refresh extended report retention: before=%v after=%v", oldCheckIn, checkIn)
 	}
 }
 
@@ -433,6 +479,43 @@ func TestMatchmakingRefreshRejectsWrongToken(t *testing.T) {
 	h.Mu.RUnlock()
 	if len(ticket.Endpoints) != 1 || ticket.Endpoints[0].IP != "198.51.100.10" || ticket.Endpoints[0].Port != 45860 {
 		t.Fatalf("ticket endpoints = %#v after wrong-token refresh, want unchanged 198.51.100.10:45860", ticket.Endpoints)
+	}
+}
+
+func TestMatchmakingOldTokenCannotRecreateDeletedTicket(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	token := decodeMatchmakingResponse(t, first).Token
+	_ = serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
+
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"}, token)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("old-token PUT returned %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	h.Mu.RLock()
+	defer h.Mu.RUnlock()
+	if len(h.Tickets) != 0 {
+		t.Fatalf("old-token PUT recreated %d ticket(s)", len(h.Tickets))
+	}
+}
+
+func TestMatchmakingExpiredTicketCannotRefresh(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	token := decodeMatchmakingResponse(t, first).Token
+	key := matchmakingTicketKey("0.9.5", "default", "TicketA")
+	h.Mu.Lock()
+	h.Tickets[key].CheckedIn = time.Now().Add(-matchmakingTicketTimeout - time.Second)
+	h.Mu.Unlock()
+
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45861", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"}, token)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expired refresh returned %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	h.Mu.RLock()
+	defer h.Mu.RUnlock()
+	if len(h.Tickets) != 0 {
+		t.Fatalf("expired refresh left %d ticket(s)", len(h.Tickets))
 	}
 }
 
@@ -803,6 +886,65 @@ func TestMatchmakingCodeTagLeaseCapsLeasesPerIP(t *testing.T) {
 	}
 }
 
+func TestMatchmakingCodeTagLeaseRefreshRespectsNewIPCap(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+		"",
+		"ALPHA1",
+		"BRAVO2",
+		"",
+	)
+	if first.Code != http.StatusOK {
+		t.Fatalf("source lease returned %d, want %d: %s", first.Code, http.StatusOK, first.Body.String())
+	}
+	firstResponse := decodeMatchmakingResponse(t, first)
+
+	for i := 0; i < maxMatchmakingTagLeasesPerIP; i++ {
+		selfTag := fmt.Sprintf("C%03d", i)
+		peerTag := fmt.Sprintf("Y%03d", i)
+		rec := serveMatchmakingRequestWithTokenAndTags(
+			h,
+			http.MethodPut,
+			fmt.Sprintf("/0.9.5/matchmaking/code.%s-%s/Ticket%d/45860", strings.ToLower(selfTag), strings.ToLower(peerTag), i),
+			"198.51.100.20:32000",
+			matchmakingRequest{Character: "Carbon"},
+			"",
+			selfTag,
+			peerTag,
+			"",
+		)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("target lease %d returned %d, want %d: %s", i, rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	refresh := serveMatchmakingRequestWithTokenAndTags(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
+		"198.51.100.20:32000",
+		matchmakingRequest{Character: "Carbon"},
+		firstResponse.Token,
+		"ALPHA1",
+		"BRAVO2",
+		firstResponse.TagToken,
+	)
+	if refresh.Code != http.StatusTooManyRequests {
+		t.Fatalf("lease transfer returned %d, want %d", refresh.Code, http.StatusTooManyRequests)
+	}
+	h.Mu.RLock()
+	_, sourceTicketStillExists := h.Tickets[matchmakingTicketKey("0.9.5", "code.alpha1-bravo2", "TicketA")]
+	h.Mu.RUnlock()
+	if !sourceTicketStillExists {
+		t.Fatal("rejected lease transfer deleted the source ticket")
+	}
+}
+
 func TestMatchmakingPutLongPollWakesOnMatch(t *testing.T) {
 	h := newTestLobbyHandler()
 
@@ -976,6 +1118,25 @@ func TestMatchmakingPutLongPollTimesOut(t *testing.T) {
 	}
 }
 
+func TestMatchmakingPutLongPollReturnsDeletion(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	token := decodeMatchmakingResponse(t, first).Token
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860?wait=2", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"}, token)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	deleted := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("DELETE returned %d", deleted.Code)
+	}
+	rec := <-done
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("deleted long-poll returned %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 	h := newTestLobbyHandler()
 
@@ -1093,6 +1254,38 @@ func TestMatchmakingDeleteRemovesWaitingTicket(t *testing.T) {
 	defer h.Mu.RUnlock()
 	if len(h.Tickets) != 0 || len(h.Matches) != 0 {
 		t.Fatalf("maps not cleared after delete: tickets=%d matches=%d", len(h.Tickets), len(h.Matches))
+	}
+}
+
+func TestMatchmakingDeleteMatchedTicketRetainsPeerReportState(t *testing.T) {
+	h := newTestLobbyHandler()
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	firstResponse := decodeMatchmakingResponse(t, first)
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	secondResponse := decodeMatchmakingResponse(t, second)
+	if secondResponse.Status != "matched" {
+		t.Fatalf("second ticket = %#v, want matched", secondResponse)
+	}
+
+	rec := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", nil, secondResponse.Token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("matched DELETE returned %d", rec.Code)
+	}
+
+	h.Mu.RLock()
+	peer := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
+	matchCount := len(h.Matches)
+	h.Mu.RUnlock()
+	if peer == nil || matchCount != 0 {
+		t.Fatalf("matched DELETE left peer/matches = %v/%d, want retained peer and no match", peer != nil, matchCount)
+	}
+	state := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, firstResponse.Token)
+	if state.Code != http.StatusOK || decodeMatchmakingResponse(t, state).Status != "canceled" {
+		t.Fatalf("peer state after matched DELETE = %d/%s, want canceled", state.Code, state.Body.String())
+	}
+	report := serveMatchmakingRequestWithToken(h, http.MethodPost, "/0.9.5/matchmaking/default/TicketA/45860/report", "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
+	if report.Code != http.StatusNoContent {
+		t.Fatalf("peer report after matched DELETE returned %d", report.Code)
 	}
 }
 
