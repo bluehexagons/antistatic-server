@@ -25,8 +25,10 @@ func TestGetClientIP(t *testing.T) {
 	}{
 		{"192.168.1.1:12345", map[string]string{}, "192.168.1.1"},
 		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.1"}, "203.0.113.1"},
-		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.1, 198.51.100.1"}, "10.0.0.1"},
+		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.1, 198.51.100.1"}, ""},
 		{"10.0.0.1:12345", map[string]string{"X-Real-IP": "203.0.113.5"}, "203.0.113.5"},
+		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.5", "X-Real-IP": "203.0.113.5"}, "203.0.113.5"},
+		{"10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.5", "X-Real-IP": "203.0.113.6"}, ""},
 	}
 
 	for _, tt := range tests {
@@ -38,6 +40,56 @@ func TestGetClientIP(t *testing.T) {
 		if got := getClientIP(req); got != tt.expected {
 			t.Errorf("getClientIP() = %q, want %q", got, tt.expected)
 		}
+	}
+}
+
+func TestGetClientIPRejectsDuplicateForwardedHeaders(t *testing.T) {
+	trustProxy = true
+	if err := setTrustedProxyCIDRs("10.0.0.0/8"); err != nil {
+		t.Fatalf("setTrustedProxyCIDRs() error = %v", err)
+	}
+	defer func() {
+		trustProxy = false
+		trustedProxyRanges = nil
+	}()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Add("X-Forwarded-For", "203.0.113.1")
+	req.Header.Add("X-Forwarded-For", "203.0.113.2")
+
+	if got := getClientIP(req); got != "" {
+		t.Fatalf("getClientIP() = %q, want empty string", got)
+	}
+}
+
+func TestRateLimiterRejectsTrustedProxyWithoutClientIdentity(t *testing.T) {
+	trustProxy = true
+	if err := setTrustedProxyCIDRs("10.0.0.0/8"); err != nil {
+		t.Fatalf("setTrustedProxyCIDRs() error = %v", err)
+	}
+	defer func() {
+		trustProxy = false
+		trustedProxyRanges = nil
+	}()
+
+	called := false
+	limiter := newRateLimiter(1, 1, time.Second)
+	defer limiter.Stop()
+	handler := limiter.middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	req := httptest.NewRequest("GET", "/health", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if called {
+		t.Fatal("handler was called without an authoritative client identity")
 	}
 }
 
@@ -60,7 +112,7 @@ func TestGetClientIPIgnoresForwardedHeadersFromUntrustedProxy(t *testing.T) {
 	}
 }
 
-func TestGetClientIPFallsBackWhenTrustedProxyHasNoForwardedHeaders(t *testing.T) {
+func TestGetClientIPRejectsTrustedProxyWithoutForwardedIdentity(t *testing.T) {
 	trustProxy = true
 	if err := setTrustedProxyCIDRs("10.0.0.0/8"); err != nil {
 		t.Fatalf("setTrustedProxyCIDRs() error = %v", err)
@@ -73,8 +125,8 @@ func TestGetClientIPFallsBackWhenTrustedProxyHasNoForwardedHeaders(t *testing.T)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "10.1.2.3:12345"
 
-	if got := getClientIP(req); got != "10.1.2.3" {
-		t.Fatalf("getClientIP() = %q, want %q", got, "10.1.2.3")
+	if got := getClientIP(req); got != "" {
+		t.Fatalf("getClientIP() = %q, want empty string", got)
 	}
 }
 

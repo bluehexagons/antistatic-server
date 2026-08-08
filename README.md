@@ -110,10 +110,21 @@ attack surface as the existing HTTP listener.
 
 ### Reverse proxy setup
 
-`-trust-proxy` is still opt-in. When enabled, forwarded headers are only honored if the immediate TCP peer is in `-trusted-proxy-cidrs`.
+`-trust-proxy` is still opt-in. When enabled, forwarded headers are only honored if the immediate TCP peer is in `-trusted-proxy-cidrs`. Requests from a trusted proxy must contain one unambiguous, valid `X-Forwarded-For` or `X-Real-IP` client address; missing or multi-hop values are rejected rather than grouped under the proxy address.
 
 For example, when nginx runs on the same host and proxies to the Go server over loopback, use `-trust-proxy -trusted-proxy-cidrs 127.0.0.1/32`.
 If nginx connects over IPv6 loopback, include `::1/128` as well.
+Configure the proxy to overwrite one client identity header with its resolved
+client address rather than appending a chain. For nginx:
+
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Real-IP "";
+```
+
+Do not use `$proxy_add_x_forwarded_for` for this service. Health probes sent
+through a trusted proxy must follow the same rule; otherwise the fail-closed
+identity check returns `400 Bad Request`.
 
 Quick command to generate a self-signed certificate:
 ```bash
