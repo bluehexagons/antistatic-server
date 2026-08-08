@@ -488,6 +488,23 @@ func (h *lobbyHandler) matchmakingTicketResponseLocked(status string, ticket *Ma
 	}
 }
 
+// activeMatchmakingTicketCountLocked excludes tickets retained only for runtime
+// reports after their match has expired. Those records still need storage, but
+// must not consume capacity for new matchmaking sessions.
+func (h *lobbyHandler) activeMatchmakingTicketCountLocked() int {
+	count := 0
+	for _, ticket := range h.Tickets {
+		if ticket.MatchedID == "" {
+			count++
+			continue
+		}
+		if _, ok := h.Matches[ticket.MatchedID]; ok {
+			count++
+		}
+	}
+	return count
+}
+
 func (h *lobbyHandler) reserveMatchmakingTagLocked(version, tag, token, ticketKey, ownerIP string, now time.Time) (string, int) {
 	if tag == "" {
 		return "", http.StatusOK
@@ -616,7 +633,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		return nil, http.StatusNotFound
 	}
 
-	if len(h.Tickets) >= maxMatchmakingTickets || len(h.Matches) >= maxMatchmakingMatches {
+	if h.activeMatchmakingTicketCountLocked() >= maxMatchmakingTickets || len(h.Matches) >= maxMatchmakingMatches {
 		return nil, http.StatusServiceUnavailable
 	}
 

@@ -378,6 +378,36 @@ func TestMatchedTicketRefreshDoesNotExtendReportRetention(t *testing.T) {
 	}
 }
 
+func TestMatchmakingCapacityIgnoresExpiredMatchReportTickets(t *testing.T) {
+	h := newTestLobbyHandler()
+	now := time.Now()
+	h.Mu.Lock()
+	for i := 0; i < maxMatchmakingTickets; i++ {
+		id := fmt.Sprintf("Report%d", i)
+		h.Tickets[matchmakingTicketKey("0.9.5", "default", id)] = &MatchmakingTicket{
+			ID:        id,
+			Version:   "0.9.5",
+			Queue:     "default",
+			Token:     fmt.Sprintf("token-%d", i),
+			MatchedID: "expired-match",
+			CreatedAt: now,
+			CheckedIn: now,
+		}
+	}
+	h.Mu.Unlock()
+
+	rec := serveMatchmakingRequest(
+		h,
+		http.MethodPut,
+		"/0.9.5/matchmaking/default/ActiveTicket/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Character: "Carbon"},
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("active ticket rejected with report-retained capacity full: %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestMatchmakingWaitingResponseIncludesQueueWaits(t *testing.T) {
 	h := newTestLobbyHandler()
 	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
