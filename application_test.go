@@ -16,6 +16,7 @@ func TestApplicationRouteAssembly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(application.Close)
 	recorder := httptest.NewRecorder()
 	application.ServeHTTP(recorder, postJSON("/1.2.3/reports/crash", `{"event_id":"random-event-id-5001","app_version":"1.2.2","platform":"linux","arch":"amd64","reason_code":"segfault","symbols":[]}`))
 	if recorder.Code != http.StatusCreated {
@@ -28,6 +29,30 @@ func TestApplicationRouteAssembly(t *testing.T) {
 	}
 }
 
+func TestApplicationCloseStopsReportLimiter(t *testing.T) {
+	application, err := newApplicationHandler(applicationConfig{}, newTestLobbyHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.Close()
+	application.Close()
+
+	select {
+	case <-application.reportLimiter.stop:
+	default:
+		t.Fatal("application close did not stop the report limiter")
+	}
+}
+
+func TestListenAddressSupportsIPv6(t *testing.T) {
+	if got := listenAddress("::1", 8443); got != "[::1]:8443" {
+		t.Fatalf("listenAddress() = %q, want %q", got, "[::1]:8443")
+	}
+	if got := listenAddress("", 8080); got != ":8080" {
+		t.Fatalf("listenAddress() = %q, want %q", got, ":8080")
+	}
+}
+
 func TestApplicationAdminConfiguration(t *testing.T) {
 	if _, err := newApplicationHandler(applicationConfig{AdminUsername: "operator"}, newTestLobbyHandler()); err == nil {
 		t.Fatal("one-sided admin configuration was accepted")
@@ -36,6 +61,7 @@ func TestApplicationAdminConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(application.Close)
 	request := httptest.NewRequest(http.MethodGet, "/admin/", nil)
 	request.RemoteAddr = "198.51.100.10:1234"
 	recorder := httptest.NewRecorder()

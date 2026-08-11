@@ -382,7 +382,7 @@ func TestMatchmakingCapacityIgnoresExpiredMatchReportTickets(t *testing.T) {
 	h := newTestLobbyHandler()
 	now := time.Now()
 	h.Mu.Lock()
-	for i := 0; i < maxMatchmakingTickets; i++ {
+	for i := range maxMatchmakingTickets {
 		id := fmt.Sprintf("Report%d", i)
 		h.Tickets[matchmakingTicketKey("0.9.5", "default", id)] = &MatchmakingTicket{
 			ID:        id,
@@ -881,7 +881,7 @@ func TestMatchmakingCodeTagLeaseRefreshExtendsExpiry(t *testing.T) {
 func TestMatchmakingCodeTagLeaseCapsLeasesPerIP(t *testing.T) {
 	h := newTestLobbyHandler()
 
-	for i := 0; i < maxMatchmakingTagLeasesPerIP; i++ {
+	for i := range maxMatchmakingTagLeasesPerIP {
 		selfTag := fmt.Sprintf("A%03d", i)
 		peerTag := fmt.Sprintf("Z%03d", i)
 		rec := serveMatchmakingRequestWithTokenAndTags(
@@ -934,7 +934,7 @@ func TestMatchmakingCodeTagLeaseRefreshRespectsNewIPCap(t *testing.T) {
 	}
 	firstResponse := decodeMatchmakingResponse(t, first)
 
-	for i := 0; i < maxMatchmakingTagLeasesPerIP; i++ {
+	for i := range maxMatchmakingTagLeasesPerIP {
 		selfTag := fmt.Sprintf("C%03d", i)
 		peerTag := fmt.Sprintf("Y%03d", i)
 		rec := serveMatchmakingRequestWithTokenAndTags(

@@ -18,6 +18,7 @@ func reportTestHandler(t *testing.T, store *reportStore) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(application.Close)
 	return maxBytes(10 * 1024)(application)
 }
 
@@ -71,7 +72,7 @@ func TestCrashAndMetricEndpointsPersistAndDedupe(t *testing.T) {
 	}
 
 	gameplayBody := `{"event_id":"random-event-id-1002","mode":"versus","stage":"arena","character":"carbon","opponent_character":"silicon","online":true,"completed":true,"duration_frames":3600,"local_players":1,"cpu_players":0,"result":"win"}`
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, postJSON("/1.2.3/metrics/gameplay", gameplayBody))
 		if recorder.Code != http.StatusNoContent {

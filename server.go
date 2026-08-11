@@ -282,7 +282,7 @@ func (m *serverMetrics) snapshotActivity(now time.Time) activitySummary {
 	m.activityMu.Unlock()
 
 	hours := make([]activityHour, 0, activityHourCount)
-	for hour := 0; hour < activityHourCount; hour++ {
+	for hour := range activityHourCount {
 		entry := activityHour{HourUTC: hour}
 		if attempts[hour] < activityPrivacyThreshold {
 			entry.Suppressed = attempts[hour] > 0
@@ -390,9 +390,7 @@ func (h *lobbyHandler) Maintain() {
 		maintenance := time.NewTicker(tickInterval)
 		h.Ticker = maintenance
 		h.Done = make(chan struct{})
-		h.MaintainWG.Add(1)
-		go func() {
-			defer h.MaintainWG.Done()
+		h.MaintainWG.Go(func() {
 			defer maintenance.Stop()
 			for {
 				select {
@@ -402,7 +400,7 @@ func (h *lobbyHandler) Maintain() {
 					h.maintainAt(time.Now())
 				}
 			}
-		}()
+		})
 	})
 }
 

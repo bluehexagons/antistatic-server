@@ -151,8 +151,11 @@ func TestRateLimiter(t *testing.T) {
 	rl := newRateLimiter(2, 2, time.Second)
 	defer rl.Stop()
 
-	if !rl.allow("192.168.1.1") || !rl.allow("192.168.1.1") {
-		t.Error("First two requests should be allowed")
+	if !rl.allow("192.168.1.1") {
+		t.Error("First request should be allowed")
+	}
+	if !rl.allow("192.168.1.1") {
+		t.Error("Second request should be allowed")
 	}
 	if rl.allow("192.168.1.1") {
 		t.Error("Third request should be denied")

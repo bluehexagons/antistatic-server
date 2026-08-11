@@ -485,12 +485,10 @@ func (s *reportStore) enqueueNetplay(reportID, version, event string) bool {
 
 func (s *reportStore) startNetplayWorker() {
 	s.netplayWorker.Do(func() {
-		s.netplayWG.Add(1)
-		go func() {
-			defer s.netplayWG.Done()
+		s.netplayWG.Go(func() {
 			for job := range s.netplayQueue {
 				var err error
-				for attempt := 0; attempt < netplayMaxAttempts; attempt++ {
+				for attempt := range netplayMaxAttempts {
 					if attempt > 0 {
 						time.Sleep(netplayRetryDelay)
 					}
@@ -506,7 +504,7 @@ func (s *reportStore) startNetplayWorker() {
 					slog.Error("Netplay report storage failed", "error", err, "reportID", job.record.ID)
 				}
 			}
-		}()
+		})
 	})
 }
 

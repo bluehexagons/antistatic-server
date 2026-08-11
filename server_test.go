@@ -117,10 +117,10 @@ func TestNormalizeMetricCode(t *testing.T) {
 func TestHealthActivityAggregatesAndSuppressesSmallBuckets(t *testing.T) {
 	h := newTestLobbyHandler()
 	now := time.Date(2026, time.July, 15, 12, 30, 0, 0, time.UTC)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		h.Metrics.recordMatchmakingAttempt(now.Add(-time.Duration(i) * 24 * time.Hour))
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		h.Metrics.recordMatchmakingAttempt(now.Add(-time.Duration(i) * 24 * time.Hour).Add(-2 * time.Hour))
 	}
 	h.Metrics.recordMatchmakingMatch(now.Add(-2*time.Hour), 4*time.Second)

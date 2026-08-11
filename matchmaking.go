@@ -945,10 +945,7 @@ func parseLongPollWait(r *http.Request) time.Duration {
 		return 0
 	}
 	wait := time.Duration(seconds) * time.Second
-	if wait > maxMatchmakingLongPoll {
-		wait = maxMatchmakingLongPoll
-	}
-	return wait
+	return min(wait, maxMatchmakingLongPoll)
 }
 
 // waitForMatchmakingResult waits for a ticket state notification, the

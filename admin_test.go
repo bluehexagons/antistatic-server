@@ -149,7 +149,7 @@ func TestAdminBoundsRenderedRows(t *testing.T) {
 	}
 	firstID := ""
 	lastID := ""
-	for i := 0; i < maxAdminRows+1; i++ {
+	for i := range maxAdminRows + 1 {
 		id, _, err := store.appendCrash(validCrashRequest(fmt.Sprintf("random-admin-event-%04d", i)))
 		if err != nil {
 			t.Fatal(err)

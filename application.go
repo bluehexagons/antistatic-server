@@ -14,6 +14,19 @@ type applicationConfig struct {
 	AdminPassword string
 }
 
+type application struct {
+	handler       http.Handler
+	reportLimiter *rateLimiter
+}
+
+func (app *application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	app.handler.ServeHTTP(w, r)
+}
+
+func (app *application) Close() {
+	app.reportLimiter.Stop()
+}
+
 func applicationConfigFromEnv() (applicationConfig, error) {
 	config := applicationConfig{
 		AdminUsername: os.Getenv("ANTISTATIC_ADMIN_USERNAME"),
@@ -32,7 +45,7 @@ func applicationConfigFromEnv() (applicationConfig, error) {
 	return config, nil
 }
 
-func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (http.Handler, error) {
+func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*application, error) {
 	if (config.AdminUsername == "") != (config.AdminPassword == "") {
 		return nil, errors.New("admin username and password must both be configured")
 	}
@@ -43,7 +56,8 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (http.
 	if config.Store != nil {
 		lobby.LastStoreCompaction = time.Now()
 	}
-	api := reportAPI{store: config.Store, limiter: newRateLimiter(10, 20, time.Minute)}
+	reportLimiter := newRateLimiter(10, 20, time.Minute)
+	api := reportAPI{store: config.Store, limiter: reportLimiter}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { serveHealth(lobby, w, r) })
 	mux.HandleFunc("/health.html", func(w http.ResponseWriter, r *http.Request) { serveHealthHTML(lobby, w, r) })
@@ -59,7 +73,7 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (http.
 		mux.Handle("/admin/", admin)
 	}
 	mux.Handle("/", lobby)
-	return mux, nil
+	return &application{handler: mux, reportLimiter: reportLimiter}, nil
 }
 
 func postOnly(next http.HandlerFunc) http.HandlerFunc {

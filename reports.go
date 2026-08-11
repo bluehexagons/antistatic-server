@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -71,12 +72,7 @@ type reportResponse struct {
 }
 
 func oneOf(value string, allowed ...string) bool {
-	for _, candidate := range allowed {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, value)
 }
 
 func validEventID(value string) bool {
@@ -153,15 +149,13 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, destination any) i
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			return http.StatusRequestEntityTooLarge
 		}
 		return http.StatusBadRequest
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			return http.StatusRequestEntityTooLarge
 		}
 		return http.StatusBadRequest

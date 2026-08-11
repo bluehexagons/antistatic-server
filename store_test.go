@@ -124,7 +124,7 @@ func TestReportStoreBoundsRecordCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoder := json.NewEncoder(file)
-	for i := 0; i < maxStoreRecords; i++ {
+	for i := range maxStoreRecords {
 		record := crashRecord{
 			ID: fmt.Sprintf("cr-%016x", i), ServerTime: now, AppVersion: "1.0",
 			EventID: fmt.Sprintf("random-event-%06d", i), Platform: "linux", Arch: "amd64", ReasonCode: "test",
@@ -383,7 +383,7 @@ func TestNetplayPersistenceQueueIsBounded(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("netplay worker did not block in injected write")
 	}
-	for i := 0; i < netplayQueueSize; i++ {
+	for i := range netplayQueueSize {
 		if !store.enqueueNetplay(fmt.Sprintf("nr-%016x", i+1), "1.0", "match_runtime_error") {
 			t.Fatalf("queue rejected record %d before reaching capacity", i)
 		}

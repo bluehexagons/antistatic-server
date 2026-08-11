@@ -49,7 +49,7 @@ func TestSanitizeLocalIPsDeduplicatesAndCanonicalizes(t *testing.T) {
 
 func TestSanitizeLocalIPsCapsAtLimit(t *testing.T) {
 	in := make([]string, 0, maxLocalIPsPerMember+5)
-	for i := 0; i < maxLocalIPsPerMember+5; i++ {
+	for i := range maxLocalIPsPerMember + 5 {
 		in = append(in, "10.0.0."+itoaForTest(i))
 	}
 	out := sanitizeLocalIPs(in)

@@ -118,13 +118,14 @@ func withTimeout(timeout time.Duration) func(http.Handler) http.Handler {
 }
 
 type rateLimiter struct {
-	shards   [rateLimiterShardCount]rateLimiterShard
-	rate     float64
-	burst    float64
-	interval time.Duration
-	metrics  *serverMetrics
-	stop     chan struct{}
-	stopOnce sync.Once
+	shards    [rateLimiterShardCount]rateLimiterShard
+	rate      float64
+	burst     float64
+	interval  time.Duration
+	metrics   *serverMetrics
+	stop      chan struct{}
+	stopOnce  sync.Once
+	cleanupWG sync.WaitGroup
 }
 
 type rateLimiterShard struct {
@@ -147,7 +148,7 @@ func newRateLimiter(rate, burst int, interval time.Duration) *rateLimiter {
 	for i := range rl.shards {
 		rl.shards[i].clients = make(map[string]*bucket)
 	}
-	go func() {
+	rl.cleanupWG.Go(func() {
 		ticker := time.NewTicker(interval * 10)
 		defer ticker.Stop()
 		for {
@@ -158,7 +159,7 @@ func newRateLimiter(rate, burst int, interval time.Duration) *rateLimiter {
 				rl.cleanup()
 			}
 		}
-	}()
+	})
 	return rl
 }
 
@@ -166,6 +167,7 @@ func (rl *rateLimiter) Stop() {
 	rl.stopOnce.Do(func() {
 		close(rl.stop)
 	})
+	rl.cleanupWG.Wait()
 }
 
 func (rl *rateLimiter) cleanup() {

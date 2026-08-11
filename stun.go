@@ -50,8 +50,7 @@ func startStunServer(host string, port int) (*stunServer, error) {
 		return nil, err
 	}
 	s := &stunServer{conn: conn}
-	s.wg.Add(1)
-	go s.serve()
+	s.wg.Go(s.serve)
 	return s, nil
 }
 
@@ -63,7 +62,6 @@ func (s *stunServer) localAddr() net.Addr {
 }
 
 func (s *stunServer) serve() {
-	defer s.wg.Done()
 	buf := make([]byte, stunMaxPacketLength)
 	for {
 		n, raddr, err := s.conn.ReadFromUDP(buf)
@@ -149,7 +147,7 @@ func buildBindingSuccess(txn []byte, raddr *net.UDPAddr) ([]byte, bool) {
 		body[5] = ip6[1] ^ byte((stunMagicCookie>>16)&0xff)
 		body[6] = ip6[2] ^ byte((stunMagicCookie>>8)&0xff)
 		body[7] = ip6[3] ^ byte(stunMagicCookie&0xff)
-		for i := 0; i < 12; i++ {
+		for i := range 12 {
 			body[8+i] = ip6[4+i] ^ txn[i]
 		}
 	}
