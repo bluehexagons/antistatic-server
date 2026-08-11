@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net"
@@ -41,6 +42,23 @@ var stunPort = 0
 
 func listenAddress(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func validateServerPorts(httpPort, tlsPort, stunPort int) error {
+	ports := []struct {
+		name string
+		port int
+	}{
+		{name: "HTTP", port: httpPort},
+		{name: "TLS", port: tlsPort},
+		{name: "STUN", port: stunPort},
+	}
+	for _, candidate := range ports {
+		if !validatePort(candidate.port) {
+			return fmt.Errorf("%s port must be between 0 and 65535", candidate.name)
+		}
+	}
+	return nil
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -164,6 +182,10 @@ func main() {
 	flag.IntVar(&stunPort, "stun-port", stunPort, "UDP port for the built-in STUN responder (0 disables; conventional value is 3478)")
 	flag.Parse()
 
+	if err := validateServerPorts(port, tlsPort, stunPort); err != nil {
+		slog.Error("Invalid server port", "error", err)
+		os.Exit(2)
+	}
 	if err := setTrustedProxyCIDRs(trustedProxyCIDRs); err != nil {
 		slog.Error("Invalid trusted proxy CIDRs", "error", err)
 		os.Exit(2)

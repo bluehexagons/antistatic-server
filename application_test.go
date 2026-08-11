@@ -53,6 +53,17 @@ func TestListenAddressSupportsIPv6(t *testing.T) {
 	}
 }
 
+func TestValidateServerPorts(t *testing.T) {
+	if err := validateServerPorts(80, 443, 3478); err != nil {
+		t.Fatalf("validateServerPorts() = %v for valid ports", err)
+	}
+	for _, ports := range [][3]int{{-1, 443, 3478}, {80, 65536, 3478}, {80, 443, -1}} {
+		if err := validateServerPorts(ports[0], ports[1], ports[2]); err == nil {
+			t.Fatalf("validateServerPorts(%v) = nil, want validation error", ports)
+		}
+	}
+}
+
 func TestApplicationAdminConfiguration(t *testing.T) {
 	if _, err := newApplicationHandler(applicationConfig{AdminUsername: "operator"}, newTestLobbyHandler()); err == nil {
 		t.Fatal("one-sided admin configuration was accepted")
