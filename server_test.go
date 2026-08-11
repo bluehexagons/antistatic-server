@@ -95,6 +95,25 @@ func TestHealthReportsStartupMetrics(t *testing.T) {
 	}
 }
 
+func TestNormalizeMetricCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    string
+	}{
+		{name: "lowercase and collapse separators", message: "  Request REJECTED: invalid/path!  ", want: "request_rejected_invalid_path"},
+		{name: "empty", message: "!@#$", want: ""},
+		{name: "bounded", message: strings.Repeat("A", 80), want: strings.Repeat("a", 64)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeMetricCode(tt.message); got != tt.want {
+				t.Fatalf("normalizeMetricCode(%q) = %q, want %q", tt.message, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHealthActivityAggregatesAndSuppressesSmallBuckets(t *testing.T) {
 	h := newTestLobbyHandler()
 	now := time.Date(2026, time.July, 15, 12, 30, 0, 0, time.UTC)

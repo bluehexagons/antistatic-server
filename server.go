@@ -117,12 +117,15 @@ func (m *serverMetrics) recordSuccessfulMatch() {
 
 func normalizeMetricCode(message string) string {
 	var b strings.Builder
+	lastSeparator := false
 	for _, c := range strings.ToLower(message) {
 		switch {
 		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
 			b.WriteRune(c)
-		case b.Len() == 0 || b.String()[b.Len()-1] != '_':
+			lastSeparator = false
+		case !lastSeparator:
 			b.WriteByte('_')
+			lastSeparator = true
 		}
 		if b.Len() >= 64 {
 			break
@@ -217,7 +220,7 @@ func (m *serverMetrics) recordMatchmakingMatch(now time.Time, wait time.Duration
 	m.activityMu.Lock()
 	bucket := m.activityBucketLocked(now)
 	bucket.Matches++
-	bucket.MatchWaitTotal += maxInt64(0, wait.Milliseconds())
+	bucket.MatchWaitTotal += max(0, wait.Milliseconds())
 	m.activityMu.Unlock()
 }
 

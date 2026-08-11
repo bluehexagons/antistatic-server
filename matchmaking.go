@@ -450,14 +450,14 @@ func (h *lobbyHandler) matchmakingQueueResponseLocked(ticket *MatchmakingTicket,
 			continue
 		}
 		response.PlayersWaiting++
-		waitMs := maxInt64(0, now.Sub(other.CreatedAt).Milliseconds())
+		waitMs := max(0, now.Sub(other.CreatedAt).Milliseconds())
 		if waitMs > response.OldestWaitMs {
 			response.OldestWaitMs = waitMs
 		}
 	}
 
 	if ticket.MatchedID == "" {
-		response.OwnWaitMs = maxInt64(0, now.Sub(ticket.CreatedAt).Milliseconds())
+		response.OwnWaitMs = max(0, now.Sub(ticket.CreatedAt).Milliseconds())
 		if response.OwnWaitMs > response.OldestWaitMs {
 			response.OldestWaitMs = response.OwnWaitMs
 		}
@@ -751,7 +751,7 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	h.removeWaitingTicketLocked(first)
 	h.removeWaitingTicketLocked(second)
 	h.recordMatchmakingQueueWaitLocked(match, first, second)
-	waitMs := maxInt64(0, (match.CreatedAt.Sub(first.CreatedAt).Milliseconds()+match.CreatedAt.Sub(second.CreatedAt).Milliseconds())/2)
+	waitMs := max(0, (match.CreatedAt.Sub(first.CreatedAt).Milliseconds()+match.CreatedAt.Sub(second.CreatedAt).Milliseconds())/2)
 	h.Metrics.recordMatchmakingMatch(match.CreatedAt, time.Duration(waitMs)*time.Millisecond)
 	h.Matches[match.ID] = match
 	first.notifyStateChangedLocked()
@@ -764,7 +764,7 @@ func (h *lobbyHandler) recordMatchmakingQueueWaitLocked(match *Match, first, sec
 	if stats == nil {
 		return
 	}
-	waitMs := maxInt64(0, (match.CreatedAt.Sub(first.CreatedAt).Milliseconds()+match.CreatedAt.Sub(second.CreatedAt).Milliseconds())/2)
+	waitMs := max(0, (match.CreatedAt.Sub(first.CreatedAt).Milliseconds()+match.CreatedAt.Sub(second.CreatedAt).Milliseconds())/2)
 	stats.Matches++
 	stats.AverageMatchWaitMs += (waitMs - stats.AverageMatchWaitMs) / stats.Matches
 }
@@ -898,13 +898,6 @@ func (h *lobbyHandler) ensureMatchmakingIndexesLocked() {
 	if h.TagLeases == nil {
 		h.TagLeases = make(map[string]*MatchmakingTagLease)
 	}
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func (h *lobbyHandler) addWaitingTicketLocked(ticket *MatchmakingTicket) {
