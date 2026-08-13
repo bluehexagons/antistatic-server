@@ -36,6 +36,7 @@ const (
 )
 
 var errStoreFull = errors.New("report store is full")
+var errCollectionDisabled = errors.New("report collection is disabled")
 
 type storeCollection string
 
@@ -53,6 +54,26 @@ var storeCollections = []storeCollection{
 	gameplayCollection,
 	performanceCollection,
 	netplayCollection,
+}
+
+func reportCollections(features FeatureConfig) []storeCollection {
+	collections := make([]storeCollection, 0, len(storeCollections))
+	if features.CrashReports {
+		collections = append(collections, crashCollection)
+	}
+	if features.FeedbackReports {
+		collections = append(collections, feedbackCollection)
+	}
+	if features.GameplayMetrics {
+		collections = append(collections, gameplayCollection)
+	}
+	if features.PerformanceMetrics {
+		collections = append(collections, performanceCollection)
+	}
+	if features.MatchmakingReports {
+		collections = append(collections, netplayCollection)
+	}
+	return collections
 }
 
 func collectionRetention(collection storeCollection) time.Duration {
@@ -151,6 +172,8 @@ type appendFile interface {
 
 type reportStore struct {
 	root           string
+	collections    []storeCollection
+	enabled        map[storeCollection]bool
 	mu             sync.Mutex
 	dedupe         map[storeCollection]map[string]dedupeEntry
 	counts         map[storeCollection]int
@@ -169,6 +192,10 @@ type reportStore struct {
 }
 
 func newReportStore(root string) (*reportStore, error) {
+	return newReportStoreForFeatures(root, DefaultConfig().Features)
+}
+
+func newReportStoreForFeatures(root string, features FeatureConfig) (*reportStore, error) {
 	if root == "" {
 		return nil, errors.New("report store directory is empty")
 	}
@@ -181,6 +208,8 @@ func newReportStore(root string) (*reportStore, error) {
 
 	store := &reportStore{
 		root:           root,
+		collections:    reportCollections(features),
+		enabled:        make(map[storeCollection]bool),
 		dedupe:         make(map[storeCollection]map[string]dedupeEntry),
 		counts:         make(map[storeCollection]int),
 		netplayIDs:     make(map[string]struct{}),
@@ -198,6 +227,9 @@ func newReportStore(root string) (*reportStore, error) {
 	for _, collection := range storeCollections {
 		store.dedupe[collection] = make(map[string]dedupeEntry)
 		store.eventDigests[collection] = make(map[string]string)
+	}
+	for _, collection := range store.collections {
+		store.enabled[collection] = true
 		file, err := os.OpenFile(store.collectionPath(collection), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			return nil, fmt.Errorf("create %s collection: %w", collection, err)
@@ -278,6 +310,9 @@ func (s *reportStore) restoreEventID(collection storeCollection, eventID string)
 }
 
 func (s *reportStore) appendJSONLocked(collection storeCollection, record any) error {
+	if !s.enabled[collection] {
+		return errCollectionDisabled
+	}
 	line, err := json.Marshal(s.recordForStorage(collection, record))
 	if err != nil {
 		return err
@@ -546,6 +581,9 @@ func countRecordsLocked[T any](s *reportStore, collection storeCollection, recor
 }
 
 func scanRecordsLocked[T any](s *reportStore, collection storeCollection, recordTime func(T) time.Time, now time.Time, visit func(T)) error {
+	if !s.enabled[collection] {
+		return errCollectionDisabled
+	}
 	file, err := os.Open(s.collectionPath(collection))
 	if err != nil {
 		return err
@@ -802,7 +840,7 @@ func retainLatest[T any](records []T, limit int) []T {
 func (s *reportStore) Compact(now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, collection := range storeCollections {
+	for _, collection := range s.collections {
 		if err := s.compactCollectionLocked(collection, now); err != nil {
 			return fmt.Errorf("compact %s collection: %w", collection, err)
 		}
@@ -811,55 +849,65 @@ func (s *reportStore) Compact(now time.Time) error {
 }
 
 func (s *reportStore) rebuildDedupeLocked(now time.Time) error {
-	for _, collection := range storeCollections {
+	for _, collection := range s.collections {
 		clear(s.dedupe[collection])
 		s.counts[collection] = 0
 	}
 	s.netplayMu.Lock()
 	clear(s.netplayIDs)
 	s.netplayMu.Unlock()
-	crashes, err := readRecordsLocked(s, crashCollection, func(record crashRecord) time.Time { return record.ServerTime }, now)
-	if err != nil {
-		return err
+	if s.enabled[crashCollection] {
+		crashes, err := readRecordsLocked(s, crashCollection, func(record crashRecord) time.Time { return record.ServerTime }, now)
+		if err != nil {
+			return err
+		}
+		for _, record := range crashes {
+			s.dedupe[crashCollection][record.EventID] = dedupeEntry{ID: record.ID, Time: record.ServerTime}
+		}
+		s.counts[crashCollection] = len(crashes)
 	}
-	for _, record := range crashes {
-		s.dedupe[crashCollection][record.EventID] = dedupeEntry{ID: record.ID, Time: record.ServerTime}
+	if s.enabled[feedbackCollection] {
+		feedback, err := readRecordsLocked(s, feedbackCollection, func(record feedbackRecord) time.Time { return record.ServerTime }, now)
+		if err != nil {
+			return err
+		}
+		for _, record := range feedback {
+			s.dedupe[feedbackCollection][record.EventID] = dedupeEntry{ID: record.ID, Time: record.ServerTime}
+		}
+		s.counts[feedbackCollection] = len(feedback)
 	}
-	s.counts[crashCollection] = len(crashes)
-	feedback, err := readRecordsLocked(s, feedbackCollection, func(record feedbackRecord) time.Time { return record.ServerTime }, now)
-	if err != nil {
-		return err
+	if s.enabled[gameplayCollection] {
+		gameplay, err := readRecordsLocked(s, gameplayCollection, func(record gameplayRecord) time.Time { return record.ServerTime }, now)
+		if err != nil {
+			return err
+		}
+		for _, record := range gameplay {
+			s.dedupe[gameplayCollection][record.EventID] = dedupeEntry{ID: record.ID, Time: record.ServerTime}
+		}
+		s.counts[gameplayCollection] = len(gameplay)
 	}
-	for _, record := range feedback {
-		s.dedupe[feedbackCollection][record.EventID] = dedupeEntry{ID: record.ID, Time: record.ServerTime}
+	if s.enabled[performanceCollection] {
+		performance, err := readRecordsLocked(s, performanceCollection, func(record performanceRecord) time.Time { return record.ServerTime }, now)
+		if err != nil {
+			return err
+		}
+		for _, record := range performance {
+			s.dedupe[performanceCollection][record.EventID] = dedupeEntry{ID: record.ID, Time: record.ServerTime}
+		}
+		s.counts[performanceCollection] = len(performance)
 	}
-	s.counts[feedbackCollection] = len(feedback)
-	gameplay, err := readRecordsLocked(s, gameplayCollection, func(record gameplayRecord) time.Time { return record.ServerTime }, now)
-	if err != nil {
-		return err
+	if s.enabled[netplayCollection] {
+		netplay, err := readRecordsLocked(s, netplayCollection, func(record netplayRecord) time.Time { return record.ServerTime }, now)
+		if err != nil {
+			return err
+		}
+		s.counts[netplayCollection] = len(netplay)
+		s.netplayMu.Lock()
+		for _, record := range netplay {
+			s.netplayIDs[record.ID] = struct{}{}
+		}
+		s.netplayMu.Unlock()
 	}
-	for _, record := range gameplay {
-		s.dedupe[gameplayCollection][record.EventID] = dedupeEntry{ID: record.ID, Time: record.ServerTime}
-	}
-	s.counts[gameplayCollection] = len(gameplay)
-	performance, err := readRecordsLocked(s, performanceCollection, func(record performanceRecord) time.Time { return record.ServerTime }, now)
-	if err != nil {
-		return err
-	}
-	for _, record := range performance {
-		s.dedupe[performanceCollection][record.EventID] = dedupeEntry{ID: record.ID, Time: record.ServerTime}
-	}
-	s.counts[performanceCollection] = len(performance)
-	netplay, err := readRecordsLocked(s, netplayCollection, func(record netplayRecord) time.Time { return record.ServerTime }, now)
-	if err != nil {
-		return err
-	}
-	s.counts[netplayCollection] = len(netplay)
-	s.netplayMu.Lock()
-	for _, record := range netplay {
-		s.netplayIDs[record.ID] = struct{}{}
-	}
-	s.netplayMu.Unlock()
 	return nil
 }
 

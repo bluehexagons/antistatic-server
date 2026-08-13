@@ -25,10 +25,6 @@ func validateMatchmakingTag(tag string) bool {
 	return validMatchmakingTag.MatchString(tag)
 }
 
-func validateMatchmakingCharacter(character string) bool {
-	return validMatchmakingCharacter.MatchString(character)
-}
-
 func validateVersion(version string) bool {
 	return validVersion.MatchString(version)
 }

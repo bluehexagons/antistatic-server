@@ -31,22 +31,22 @@ var adminOverviewTemplate = template.Must(template.New("overview").Parse(`<!doct
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.ServiceName}} reports</title><link rel="stylesheet" href="/admin/style.css"></head>
 <body><h1>{{.ServiceName}} reports</h1>{{template "nav" .}}<p>Only privacy-bounded, rounded records are shown here.</p>
 {{if not .Available}}<p class="status">Report storage is unavailable. Configure ANTISTATIC_DATA_DIR to enable collection.</p>{{else}}
-<div class="cards"><div class="card"><strong>Crash reports</strong><br>{{.CrashCount}}</div><div class="card"><strong>Feedback</strong><br>{{.FeedbackCount}}</div><div class="card"><strong>Gameplay samples</strong><br>{{.GameplayCount}}</div><div class="card"><strong>Performance samples</strong><br>{{.PerformanceCount}}</div><div class="card"><strong>Netplay reports</strong><br>{{.NetplayCount}}</div></div>{{end}}</body></html>
-{{define "nav"}}<nav><a href="/admin/">Overview</a><a href="/admin/crash">Crashes</a><a href="/admin/feedback">Feedback</a><a href="/admin/gameplay">Gameplay</a><a href="/admin/performance">Performance</a><a href="/admin/netplay">Netplay</a></nav>{{end}}`))
+<div class="cards">{{range .Sections}}<div class="card"><strong>{{.Name}}</strong><br>{{.Count}}</div>{{end}}</div>{{end}}</body></html>
+{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
 
-var adminCrashTemplate = template.Must(template.New("crash").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Crash reports</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Crash reports</h1>{{template "nav" .}}<p>{{.CrashCount}} retained reports; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>ID</th><th>Version</th><th>Platform</th><th>Reason</th></tr>{{range .Crashes}}<tr><td>{{.ServerTime}}</td><td><a href="/admin/crash/{{.ID}}">{{.ID}}</a></td><td>{{.AppVersion}}</td><td>{{.Platform}} / {{.Arch}}</td><td>{{.ReasonCode}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a><a href="/admin/crash">Crashes</a><a href="/admin/feedback">Feedback</a><a href="/admin/gameplay">Gameplay</a><a href="/admin/performance">Performance</a><a href="/admin/netplay">Netplay</a></nav>{{end}}`))
+var adminCrashTemplate = template.Must(template.New("crash").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Crash reports</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Crash reports</h1>{{template "nav" .}}<p>{{.CrashCount}} retained reports; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>ID</th><th>Version</th><th>Platform</th><th>Reason</th></tr>{{range .Crashes}}<tr><td>{{.ServerTime}}</td><td><a href="/admin/crash/{{.ID}}">{{.ID}}</a></td><td>{{.AppVersion}}</td><td>{{.Platform}} / {{.Arch}}</td><td>{{.ReasonCode}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
 
 var adminCrashDetailTemplate = template.Must(template.New("crash-detail").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Crash {{.ID}}</title><link rel="stylesheet" href="/admin/style.css"></head><body><p><a href="/admin/crash">Back to crashes</a></p><h1>Crash {{.ID}}</h1><dl><dt>Time bucket</dt><dd>{{.ServerTime}}</dd><dt>Version</dt><dd>{{.AppVersion}}</dd><dt>Platform</dt><dd>{{.Platform}} / {{.Arch}}</dd><dt>Reason</dt><dd>{{.ReasonCode}}</dd><dt>Symbols</dt><dd>{{if .Symbols}}<ol>{{range .Symbols}}<li><code>{{.}}</code></li>{{end}}</ol>{{else}}None{{end}}</dd></dl></body></html>`))
 
-var adminFeedbackTemplate = template.Must(template.New("feedback").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Feedback</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Feedback</h1>{{template "nav" .}}<p>{{.FeedbackCount}} retained messages; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>ID</th><th>Category</th><th>Subject</th><th>Version</th></tr>{{range .Feedback}}<tr><td>{{.ServerTime}}</td><td><a href="/admin/feedback/{{.ID}}">{{.ID}}</a></td><td>{{.Category}}</td><td>{{.Subject}}</td><td>{{.AppVersion}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a><a href="/admin/crash">Crashes</a><a href="/admin/feedback">Feedback</a><a href="/admin/gameplay">Gameplay</a><a href="/admin/performance">Performance</a><a href="/admin/netplay">Netplay</a></nav>{{end}}`))
+var adminFeedbackTemplate = template.Must(template.New("feedback").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Feedback</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Feedback</h1>{{template "nav" .}}<p>{{.FeedbackCount}} retained messages; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>ID</th><th>Category</th><th>Subject</th><th>Version</th></tr>{{range .Feedback}}<tr><td>{{.ServerTime}}</td><td><a href="/admin/feedback/{{.ID}}">{{.ID}}</a></td><td>{{.Category}}</td><td>{{.Subject}}</td><td>{{.AppVersion}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
 
 var adminFeedbackDetailTemplate = template.Must(template.New("feedback-detail").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Feedback {{.ID}}</title><link rel="stylesheet" href="/admin/style.css"></head><body><p><a href="/admin/feedback">Back to feedback</a></p><h1>{{.Subject}}</h1><p>{{.Category}} · {{.AppVersion}} · {{.ServerTime}}</p>{{if .RelatedReportID}}<p>Related report: <code>{{.RelatedReportID}}</code></p>{{end}}<pre>{{.Body}}</pre></body></html>`))
 
-var adminGameplayTemplate = template.Must(template.New("gameplay").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Gameplay metrics</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Gameplay metrics</h1>{{template "nav" .}}<p>{{.GameplayCount}} retained coarse samples; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Version</th><th>Mode</th><th>Stage</th><th>Characters</th><th>Result</th><th>Frames</th></tr>{{range .Gameplay}}<tr><td>{{.ServerTime}}</td><td>{{.AppVersion}}</td><td>{{.Mode}}{{if .Online}} (online){{end}}</td><td>{{.Stage}}</td><td>{{.Character}} / {{.OpponentCharacter}}</td><td>{{.Result}}</td><td>{{.DurationFrames}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a><a href="/admin/crash">Crashes</a><a href="/admin/feedback">Feedback</a><a href="/admin/gameplay">Gameplay</a><a href="/admin/performance">Performance</a><a href="/admin/netplay">Netplay</a></nav>{{end}}`))
+var adminGameplayTemplate = template.Must(template.New("gameplay").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Gameplay metrics</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Gameplay metrics</h1>{{template "nav" .}}<p>{{.GameplayCount}} retained coarse samples; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Version</th><th>Mode</th><th>Stage</th><th>Characters</th><th>Result</th><th>Frames</th></tr>{{range .Gameplay}}<tr><td>{{.ServerTime}}</td><td>{{.AppVersion}}</td><td>{{.Mode}}{{if .Online}} (online){{end}}</td><td>{{.Stage}}</td><td>{{.Character}} / {{.OpponentCharacter}}</td><td>{{.Result}}</td><td>{{.DurationFrames}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
 
-var adminPerformanceTemplate = template.Must(template.New("performance").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Performance metrics</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Performance metrics</h1>{{template "nav" .}}<p>{{.PerformanceCount}} retained coarse samples; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Version</th><th>Platform</th><th>Renderer / vendor</th><th>Hardware buckets</th><th>Frames</th><th>Frame ms avg / p95</th></tr>{{range .Performance}}<tr><td>{{.ServerTime}}</td><td>{{.AppVersion}}</td><td>{{.Platform}} / {{.Arch}}</td><td>{{.RendererFamily}} / {{.GPUVendor}}</td><td>{{.MemoryGiBBucket}} GiB · {{.CPUCoresBucket}} cores · {{.ResolutionBucket}}</td><td>{{.SampleFrames}}</td><td>{{printf "%.2f / %.2f" .FrameMsAvg .FrameMsP95}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a><a href="/admin/crash">Crashes</a><a href="/admin/feedback">Feedback</a><a href="/admin/gameplay">Gameplay</a><a href="/admin/performance">Performance</a><a href="/admin/netplay">Netplay</a></nav>{{end}}`))
+var adminPerformanceTemplate = template.Must(template.New("performance").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Performance metrics</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Performance metrics</h1>{{template "nav" .}}<p>{{.PerformanceCount}} retained coarse samples; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Version</th><th>Platform</th><th>Renderer / vendor</th><th>Hardware buckets</th><th>Frames</th><th>Frame ms avg / p95</th></tr>{{range .Performance}}<tr><td>{{.ServerTime}}</td><td>{{.AppVersion}}</td><td>{{.Platform}} / {{.Arch}}</td><td>{{.RendererFamily}} / {{.GPUVendor}}</td><td>{{.MemoryGiBBucket}} GiB · {{.CPUCoresBucket}} cores · {{.ResolutionBucket}}</td><td>{{.SampleFrames}}</td><td>{{printf "%.2f / %.2f" .FrameMsAvg .FrameMsP95}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
 
-var adminNetplayTemplate = template.Must(template.New("netplay").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Netplay reports</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Netplay reports</h1>{{template "nav" .}}<p>{{.NetplayCount}} retained reports; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Report ID</th><th>Version</th><th>Event</th></tr>{{range .Netplay}}<tr><td>{{.ServerTime}}</td><td>{{.ID}}</td><td>{{.AppVersion}}</td><td>{{.Event}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a><a href="/admin/crash">Crashes</a><a href="/admin/feedback">Feedback</a><a href="/admin/gameplay">Gameplay</a><a href="/admin/performance">Performance</a><a href="/admin/netplay">Netplay</a></nav>{{end}}`))
+var adminNetplayTemplate = template.Must(template.New("netplay").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Netplay reports</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Netplay reports</h1>{{template "nav" .}}<p>{{.NetplayCount}} retained reports; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Report ID</th><th>Version</th><th>Event</th></tr>{{range .Netplay}}<tr><td>{{.ServerTime}}</td><td>{{.ID}}</td><td>{{.AppVersion}}</td><td>{{.Event}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
 
 type adminPageData struct {
 	ServiceName      string
@@ -61,30 +61,49 @@ type adminPageData struct {
 	Gameplay         []gameplayRecord
 	Performance      []performanceRecord
 	Netplay          []netplayRecord
+	Sections         []adminSection
+}
+
+type adminSection struct {
+	Name      string
+	ShortName string
+	Path      string
+	Count     int
 }
 
 type adminServer struct {
 	store        *reportStore
 	serviceName  string
+	features     FeatureConfig
 	usernameHash [32]byte
 	passwordHash [32]byte
 	mux          *http.ServeMux
 }
 
-func newAdminHandler(store *reportStore, username, password, serviceName string) http.Handler {
+func newAdminHandler(store *reportStore, username, password, serviceName string, features FeatureConfig) http.Handler {
 	admin := &adminServer{
 		store: store, usernameHash: sha256.Sum256([]byte(username)), passwordHash: sha256.Sum256([]byte(password)),
-		serviceName: serviceName, mux: http.NewServeMux(),
+		serviceName: serviceName, features: features, mux: http.NewServeMux(),
 	}
 	admin.mux.HandleFunc("GET /admin/", admin.overview)
 	admin.mux.HandleFunc("GET /admin/style.css", admin.style)
-	admin.mux.HandleFunc("GET /admin/crash", admin.crashes)
-	admin.mux.HandleFunc("GET /admin/crash/{id}", admin.crashDetail)
-	admin.mux.HandleFunc("GET /admin/feedback", admin.feedback)
-	admin.mux.HandleFunc("GET /admin/feedback/{id}", admin.feedbackDetail)
-	admin.mux.HandleFunc("GET /admin/gameplay", admin.gameplay)
-	admin.mux.HandleFunc("GET /admin/performance", admin.performance)
-	admin.mux.HandleFunc("GET /admin/netplay", admin.netplay)
+	if features.CrashReports {
+		admin.mux.HandleFunc("GET /admin/crash", admin.crashes)
+		admin.mux.HandleFunc("GET /admin/crash/{id}", admin.crashDetail)
+	}
+	if features.FeedbackReports {
+		admin.mux.HandleFunc("GET /admin/feedback", admin.feedback)
+		admin.mux.HandleFunc("GET /admin/feedback/{id}", admin.feedbackDetail)
+	}
+	if features.GameplayMetrics {
+		admin.mux.HandleFunc("GET /admin/gameplay", admin.gameplay)
+	}
+	if features.PerformanceMetrics {
+		admin.mux.HandleFunc("GET /admin/performance", admin.performance)
+	}
+	if features.MatchmakingReports {
+		admin.mux.HandleFunc("GET /admin/netplay", admin.netplay)
+	}
 	return admin
 }
 
@@ -125,32 +144,80 @@ func latestRecords[T any](records []T) []T {
 	return result
 }
 
-func (admin *adminServer) overviewData() (adminPageData, error) {
+func (admin *adminServer) pageData() adminPageData {
 	data := adminPageData{ServiceName: admin.serviceName, Available: admin.store != nil}
+	if admin.features.CrashReports {
+		data.Sections = append(data.Sections, adminSection{Name: "Crash reports", ShortName: "Crashes", Path: "/admin/crash"})
+	}
+	if admin.features.FeedbackReports {
+		data.Sections = append(data.Sections, adminSection{Name: "Feedback", ShortName: "Feedback", Path: "/admin/feedback"})
+	}
+	if admin.features.GameplayMetrics {
+		data.Sections = append(data.Sections, adminSection{Name: "Gameplay samples", ShortName: "Gameplay", Path: "/admin/gameplay"})
+	}
+	if admin.features.PerformanceMetrics {
+		data.Sections = append(data.Sections, adminSection{Name: "Performance samples", ShortName: "Performance", Path: "/admin/performance"})
+	}
+	if admin.features.MatchmakingReports {
+		data.Sections = append(data.Sections, adminSection{Name: "Netplay reports", ShortName: "Netplay", Path: "/admin/netplay"})
+	}
+	return data
+}
+
+func setAdminSectionCounts(data *adminPageData) {
+	for index := range data.Sections {
+		switch data.Sections[index].Path {
+		case "/admin/crash":
+			data.Sections[index].Count = data.CrashCount
+		case "/admin/feedback":
+			data.Sections[index].Count = data.FeedbackCount
+		case "/admin/gameplay":
+			data.Sections[index].Count = data.GameplayCount
+		case "/admin/performance":
+			data.Sections[index].Count = data.PerformanceCount
+		case "/admin/netplay":
+			data.Sections[index].Count = data.NetplayCount
+		}
+	}
+}
+
+func (admin *adminServer) overviewData() (adminPageData, error) {
+	data := admin.pageData()
 	if admin.store == nil {
 		return data, nil
 	}
 	var err error
-	data.CrashCount, err = admin.store.crashCount()
-	if err != nil {
-		return data, err
+	if admin.features.CrashReports {
+		data.CrashCount, err = admin.store.crashCount()
+		if err != nil {
+			return data, err
+		}
 	}
-	data.FeedbackCount, err = admin.store.feedbackCount()
-	if err != nil {
-		return data, err
+	if admin.features.FeedbackReports {
+		data.FeedbackCount, err = admin.store.feedbackCount()
+		if err != nil {
+			return data, err
+		}
 	}
-	data.GameplayCount, err = admin.store.gameplayCount()
-	if err != nil {
-		return data, err
+	if admin.features.GameplayMetrics {
+		data.GameplayCount, err = admin.store.gameplayCount()
+		if err != nil {
+			return data, err
+		}
 	}
-	data.PerformanceCount, err = admin.store.performanceCount()
-	if err != nil {
-		return data, err
+	if admin.features.PerformanceMetrics {
+		data.PerformanceCount, err = admin.store.performanceCount()
+		if err != nil {
+			return data, err
+		}
 	}
-	data.NetplayCount, err = admin.store.netplayCount()
-	if err != nil {
-		return data, err
+	if admin.features.MatchmakingReports {
+		data.NetplayCount, err = admin.store.netplayCount()
+		if err != nil {
+			return data, err
+		}
 	}
+	setAdminSectionCounts(&data)
 	return data, nil
 }
 
@@ -161,7 +228,11 @@ func executeAdminTemplate(w http.ResponseWriter, tmpl *template.Template, data a
 	}
 }
 
-func (admin *adminServer) overview(w http.ResponseWriter, _ *http.Request) {
+func (admin *adminServer) overview(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/admin/" {
+		http.NotFound(w, r)
+		return
+	}
 	data, err := admin.overviewData()
 	if err != nil {
 		adminReadError(w)
@@ -176,7 +247,7 @@ func (admin *adminServer) style(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (admin *adminServer) crashes(w http.ResponseWriter, _ *http.Request) {
-	data := adminPageData{Available: admin.store != nil}
+	data := admin.pageData()
 	if admin.store != nil {
 		records, err := admin.store.crashes()
 		if err != nil {
@@ -209,7 +280,7 @@ func (admin *adminServer) crashDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (admin *adminServer) feedback(w http.ResponseWriter, _ *http.Request) {
-	data := adminPageData{Available: admin.store != nil}
+	data := admin.pageData()
 	if admin.store != nil {
 		records, err := admin.store.feedback()
 		if err != nil {
@@ -242,7 +313,7 @@ func (admin *adminServer) feedbackDetail(w http.ResponseWriter, r *http.Request)
 }
 
 func (admin *adminServer) gameplay(w http.ResponseWriter, _ *http.Request) {
-	data := adminPageData{Available: admin.store != nil}
+	data := admin.pageData()
 	if admin.store != nil {
 		records, err := admin.store.gameplay()
 		if err != nil {
@@ -256,7 +327,7 @@ func (admin *adminServer) gameplay(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (admin *adminServer) performance(w http.ResponseWriter, _ *http.Request) {
-	data := adminPageData{Available: admin.store != nil}
+	data := admin.pageData()
 	if admin.store != nil {
 		records, err := admin.store.performance()
 		if err != nil {
@@ -270,7 +341,7 @@ func (admin *adminServer) performance(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (admin *adminServer) netplay(w http.ResponseWriter, _ *http.Request) {
-	data := adminPageData{Available: admin.store != nil}
+	data := admin.pageData()
 	if admin.store != nil {
 		records, err := admin.store.netplay()
 		if err != nil {

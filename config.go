@@ -125,53 +125,6 @@ type Config struct {
 	Events        []QueueEventConfig `json:"events"`
 }
 
-// DefaultConfig returns the bundled Antistatic profile. Callers receive their
-// own event slice so a source-level adaptation cannot mutate another config.
-func DefaultConfig() Config {
-	return Config{
-		SchemaVersion: configSchemaVersion,
-		Service: ServiceConfig{
-			Name:            "Antistatic",
-			CompatibilityID: "antistatic-v1",
-		},
-		Features: FeatureConfig{
-			Events:             true,
-			CrashReports:       true,
-			FeedbackReports:    true,
-			GameplayMetrics:    true,
-			PerformanceMetrics: true,
-			MatchmakingReports: true,
-		},
-		Timeouts: TimeoutConfig{
-			LobbyMember:                ConfigDuration(defaultLobbyMemberTimeout),
-			MatchmakingTicket:          ConfigDuration(defaultMatchmakingTicketTimeout),
-			MatchmakingMatch:           ConfigDuration(defaultMatchmakingMatchTimeout),
-			MatchmakingReportRetention: ConfigDuration(defaultMatchmakingReportRetention),
-			MatchmakingTagLease:        ConfigDuration(defaultMatchmakingTagLeaseTimeout),
-		},
-		Events: []QueueEventConfig{
-			{
-				ID:             "americas-community-queue",
-				Name:           "Americas community queue",
-				Region:         "Americas",
-				Weekday:        ConfigWeekday(time.Saturday),
-				StartHourUTC:   21,
-				StartMinuteUTC: 0,
-				Duration:       ConfigDuration(time.Hour),
-			},
-			{
-				ID:             "eurasia-community-queue",
-				Name:           "Eurasia community queue",
-				Region:         "Eurasia",
-				Weekday:        ConfigWeekday(time.Sunday),
-				StartHourUTC:   18,
-				StartMinuteUTC: 0,
-				Duration:       ConfigDuration(time.Hour),
-			},
-		},
-	}
-}
-
 // LoadConfig overlays a profile on the Antistatic defaults. Omitting a field
 // keeps its default; an explicit empty events array removes every event.
 func LoadConfig(path string) (Config, error) {

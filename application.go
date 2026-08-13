@@ -38,7 +38,7 @@ func applicationConfigFromEnv(game Config) (applicationConfig, error) {
 		return applicationConfig{}, errors.New("ANTISTATIC_ADMIN_USERNAME and ANTISTATIC_ADMIN_PASSWORD must both be set")
 	}
 	if dataDir := strings.TrimSpace(os.Getenv("ANTISTATIC_DATA_DIR")); dataDir != "" {
-		store, err := newReportStore(dataDir)
+		store, err := newReportStoreForFeatures(dataDir, game.Features)
 		if err != nil {
 			return applicationConfig{}, err
 		}
@@ -87,7 +87,7 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*appl
 		mux.HandleFunc(apiPrefix+"/metrics/performance", postOnly(api.performance))
 	}
 	if config.AdminUsername != "" {
-		admin := newAdminHandler(config.Store, config.AdminUsername, config.AdminPassword, config.Game.Service.Name)
+		admin := newAdminHandler(config.Store, config.AdminUsername, config.AdminPassword, config.Game.Service.Name, config.Game.Features)
 		mux.Handle("/admin", admin)
 		mux.Handle("/admin/", admin)
 	}

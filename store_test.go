@@ -39,6 +39,37 @@ func validCrashRequest(eventID string) crashRequest {
 	}
 }
 
+func TestReportStoreCreatesOnlyEnabledCollections(t *testing.T) {
+	root := t.TempDir()
+	features := FeatureConfig{FeedbackReports: true}
+	store, err := newReportStoreForFeatures(root, features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+
+	for _, collection := range storeCollections {
+		_, statErr := os.Stat(store.collectionPath(collection))
+		if collection == feedbackCollection {
+			if statErr != nil {
+				t.Fatalf("enabled %s collection was not created: %v", collection, statErr)
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("disabled %s collection exists or returned unexpected error: %v", collection, statErr)
+		}
+	}
+
+	if _, _, err := store.appendCrash(validCrashRequest("random-disabled-crash-0001")); !errors.Is(err, errCollectionDisabled) {
+		t.Fatalf("append to disabled crash collection error = %v, want %v", err, errCollectionDisabled)
+	}
+	if _, _, err := store.appendFeedback(feedbackRequest{EventID: "random-enabled-feedback-0001"}, "1.0.0"); err != nil {
+		t.Fatalf("append to enabled feedback collection: %v", err)
+	}
+	if err := store.Compact(time.Now()); err != nil {
+		t.Fatalf("compact enabled collections: %v", err)
+	}
+}
+
 func TestReportStorePersistsDeduplicatesAndSecuresFiles(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "reports")
 	store, err := newReportStore(dir)

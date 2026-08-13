@@ -55,6 +55,25 @@ match lifetime, and 24-hour report-retention and match-code lease lifetimes.
 The existing capacity, request-size, identifier, and storage bounds below are
 not configurable.
 
+#### Adapting the source for another game
+
+The runtime profile intentionally stops short of being a rule language or
+plugin system. Forks normally make their game-facing changes in three
+conspicuous files:
+
+- `antistatic_profile.go` owns the bundled service identity, compatibility
+  partition, feature defaults, timeouts, and recurring events.
+- `antistatic_matchmaking.go` owns typed ticket metadata, its validation,
+  compatible-ticket policy, and host/client role assignment.
+- `antistatic_reports.go` owns the game-specific gameplay metric schema,
+  validation, and ingestion handler.
+
+The generic lobby lifecycle, peer endpoint disclosure, ticket ownership,
+storage mechanics, and HTTP plumbing remain in their ordinary source files.
+Changing a wire shape also requires updating `protocol/openapi.json`, its
+shared fixtures, and regenerating `protocol/index.d.ts` with `npm run
+generate`.
+
 By default, HTTPS support looks for `cert.key` and `cert.crt` in the working directory.
 Use `-cert path` and `-key path` to specify custom locations.
 Specifying a port using -tlsport will implicitly enable TLS.
@@ -292,8 +311,11 @@ return 204 and deduplicate event IDs within retention.
 
 ### Report storage and administration
 
-`ANTISTATIC_DATA_DIR` contains separate `crash.jsonl`, `feedback.jsonl`,
-`gameplay.jsonl`, `performance.jsonl`, and `netplay.jsonl` append-only files.
+`ANTISTATIC_DATA_DIR` contains a separate append-only JSON Lines file for each
+enabled report feature: `crash.jsonl`, `feedback.jsonl`, `gameplay.jsonl`,
+`performance.jsonl`, or `netplay.jsonl`. Disabled collections are not opened,
+created, compacted, or shown in the admin UI. Existing files are left in place
+when a feature is disabled so re-enabling it is reversible.
 The directory is mode 0700 and files are mode 0600. Writes are serialized and
 synced. Startup and daily maintenance compaction safely drop malformed records
 and expired data; readers also tolerate an incomplete final line. Crash and coarse netplay
@@ -315,9 +337,9 @@ A full queue drops that persistence attempt, and already-persisted IDs are not
 written twice. Ordinary shutdown drains records that were accepted into the
 queue before closing the store.
 
-The dependency-free admin UI is under `/admin/` and includes crash and
-feedback details plus gameplay, performance, and netplay views. Every admin
-resource, including `/admin/style.css`, requires HTTP Basic authentication over
+The dependency-free admin UI is under `/admin/` and includes only the views
+enabled by the game profile. Every admin resource, including
+`/admin/style.css`, requires HTTP Basic authentication over
 TLS. `X-Forwarded-Proto: https` is accepted only when `-trust-proxy` is enabled
 and the immediate peer is in `-trusted-proxy-cidrs`. Do not expose Basic auth
 over plain HTTP. A reverse proxy must overwrite, not append or pass through,

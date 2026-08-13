@@ -23,7 +23,7 @@ func adminRequest(method, target, username, password string, secure bool) *http.
 }
 
 func TestAdminRequiresTLSAndConstantTimeCredentials(t *testing.T) {
-	admin := securityHeaders(newAdminHandler(nil, "operator", "correct horse battery staple", "Antistatic"))
+	admin := securityHeaders(newAdminHandler(nil, "operator", "correct horse battery staple", "Antistatic", DefaultConfig().Features))
 	recorder := httptest.NewRecorder()
 	admin.ServeHTTP(recorder, adminRequest(http.MethodGet, "/admin/", "operator", "correct horse battery staple", false))
 	if recorder.Code != http.StatusBadRequest {
@@ -57,6 +57,32 @@ func TestAdminRequiresTLSAndConstantTimeCredentials(t *testing.T) {
 	}
 }
 
+func TestAdminRegistersOnlyEnabledReportSections(t *testing.T) {
+	features := FeatureConfig{CrashReports: true}
+	store, err := newReportStoreForFeatures(t.TempDir(), features)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	admin := newAdminHandler(store, "operator", "password", "Another Game", features)
+
+	overview := httptest.NewRecorder()
+	admin.ServeHTTP(overview, adminRequest(http.MethodGet, "/admin/", "operator", "password", true))
+	if overview.Code != http.StatusOK {
+		t.Fatalf("overview status = %d: %s", overview.Code, overview.Body.String())
+	}
+	body := overview.Body.String()
+	if !strings.Contains(body, "/admin/crash") || strings.Contains(body, "/admin/feedback") || strings.Contains(body, "/admin/gameplay") {
+		t.Fatalf("overview did not match enabled report sections: %s", body)
+	}
+
+	disabled := httptest.NewRecorder()
+	admin.ServeHTTP(disabled, adminRequest(http.MethodGet, "/admin/feedback", "operator", "password", true))
+	if disabled.Code != http.StatusNotFound {
+		t.Fatalf("disabled admin section status = %d, want 404", disabled.Code)
+	}
+}
+
 func TestAdminEscapesStoredFeedback(t *testing.T) {
 	store, err := newReportStore(t.TempDir())
 	if err != nil {
@@ -68,7 +94,7 @@ func TestAdminEscapesStoredFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := newAdminHandler(store, "operator", "password", "Antistatic")
+	admin := newAdminHandler(store, "operator", "password", "Antistatic", DefaultConfig().Features)
 	recorder := httptest.NewRecorder()
 	admin.ServeHTTP(recorder, adminRequest(http.MethodGet, "/admin/feedback/"+id, "operator", "password", true))
 	if recorder.Code != http.StatusOK {
@@ -94,7 +120,7 @@ func TestAdminAcceptsForwardedHTTPSOnlyFromTrustedProxy(t *testing.T) {
 	if err := setTrustedProxyCIDRs("10.0.0.0/8"); err != nil {
 		t.Fatal(err)
 	}
-	admin := newAdminHandler(nil, "operator", "password", "Antistatic")
+	admin := newAdminHandler(nil, "operator", "password", "Antistatic", DefaultConfig().Features)
 	for _, test := range []struct {
 		remote string
 		want   int
@@ -125,7 +151,7 @@ func TestAdminCategoryReadsAndStorageErrors(t *testing.T) {
 	if err := os.Remove(store.collectionPath(feedbackCollection)); err != nil {
 		t.Fatal(err)
 	}
-	admin := newAdminHandler(store, "operator", "password", "Antistatic")
+	admin := newAdminHandler(store, "operator", "password", "Antistatic", DefaultConfig().Features)
 	for _, target := range []string{"/admin/crash", "/admin/crash/" + crashID} {
 		recorder := httptest.NewRecorder()
 		admin.ServeHTTP(recorder, adminRequest(http.MethodGet, target, "operator", "password", true))
@@ -159,7 +185,7 @@ func TestAdminBoundsRenderedRows(t *testing.T) {
 		}
 		lastID = id
 	}
-	admin := newAdminHandler(store, "operator", "password", "Antistatic")
+	admin := newAdminHandler(store, "operator", "password", "Antistatic", DefaultConfig().Features)
 	recorder := httptest.NewRecorder()
 	admin.ServeHTTP(recorder, adminRequest(http.MethodGet, "/admin/crash", "operator", "password", true))
 	if recorder.Code != http.StatusOK {

@@ -203,14 +203,6 @@ type matchmakingRequest struct {
 	MatchCode      *matchmakingTagPair `json:"match_code,omitempty"`
 }
 
-// matchmakingMetadata is the deliberately small game-specific part of the
-// otherwise generic peer-introduction contract. A source-level adaptation can
-// replace this typed struct and its validator without changing matchmaking,
-// ownership, or NAT traversal code.
-type matchmakingMetadata struct {
-	Character string `json:"character"`
-}
-
 type gameReportRequest struct {
 	clientIdentity
 	Queue     string              `json:"queue"`
@@ -703,16 +695,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now time.Time) (*Match, *MatchmakingTicket) {
 	var candidate *MatchmakingTicket
 	for _, other := range h.Waiting[matchmakingQueueKey(ticket.Version, ticket.Queue)] {
-		if other == ticket {
-			continue
-		}
-		if other.MatchedID != "" || !other.waiting(now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
-			continue
-		}
-		if ticket.sharesEndpoint(other) {
-			continue
-		}
-		if !ticket.tagMatches(other) {
+		if !ticketsCompatible(ticket, other, now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
 			continue
 		}
 
@@ -729,10 +712,7 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 		first, second = candidate, ticket
 	}
 
-	firstParticipant := first.participantForMatch()
-	firstParticipant.Role = "host"
-	secondParticipant := second.participantForMatch()
-	secondParticipant.Role = "client"
+	firstParticipant, secondParticipant := assignMatchParticipants(first, second)
 
 	match := &Match{
 		ID:        matchmakingMatchID(ticket.Version, ticket.Queue, firstParticipant, secondParticipant),
