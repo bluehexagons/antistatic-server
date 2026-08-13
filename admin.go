@@ -42,8 +42,6 @@ var adminFeedbackTemplate = template.Must(template.New("feedback").Parse(`<!doct
 
 var adminFeedbackDetailTemplate = template.Must(template.New("feedback-detail").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Feedback {{.ID}}</title><link rel="stylesheet" href="/admin/style.css"></head><body><p><a href="/admin/feedback">Back to feedback</a></p><h1>{{.Subject}}</h1><p>{{.Category}} · {{.AppVersion}} · {{.ServerTime}}</p>{{if .RelatedReportID}}<p>Related report: <code>{{.RelatedReportID}}</code></p>{{end}}<pre>{{.Body}}</pre></body></html>`))
 
-var adminGameplayTemplate = template.Must(template.New("gameplay").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Gameplay metrics</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Gameplay metrics</h1>{{template "nav" .}}<p>{{.GameplayCount}} retained coarse samples; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Version</th><th>Mode</th><th>Stage</th><th>Characters</th><th>Result</th><th>Frames</th></tr>{{range .Gameplay}}<tr><td>{{.ServerTime}}</td><td>{{.AppVersion}}</td><td>{{.Mode}}{{if .Online}} (online){{end}}</td><td>{{.Stage}}</td><td>{{.Character}} / {{.OpponentCharacter}}</td><td>{{.Result}}</td><td>{{.DurationFrames}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
-
 var adminPerformanceTemplate = template.Must(template.New("performance").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Performance metrics</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Performance metrics</h1>{{template "nav" .}}<p>{{.PerformanceCount}} retained coarse samples; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Version</th><th>Platform</th><th>Renderer / vendor</th><th>Hardware buckets</th><th>Frames</th><th>Frame ms avg / p95</th></tr>{{range .Performance}}<tr><td>{{.ServerTime}}</td><td>{{.AppVersion}}</td><td>{{.Platform}} / {{.Arch}}</td><td>{{.RendererFamily}} / {{.GPUVendor}}</td><td>{{.MemoryGiBBucket}} GiB · {{.CPUCoresBucket}} cores · {{.ResolutionBucket}}</td><td>{{.SampleFrames}}</td><td>{{printf "%.2f / %.2f" .FrameMsAvg .FrameMsP95}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
 
 var adminNetplayTemplate = template.Must(template.New("netplay").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Netplay reports</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Netplay reports</h1>{{template "nav" .}}<p>{{.NetplayCount}} retained reports; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Report ID</th><th>Version</th><th>Event</th></tr>{{range .Netplay}}<tr><td>{{.ServerTime}}</td><td>{{.ID}}</td><td>{{.AppVersion}}</td><td>{{.Event}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a>{{range .Sections}}<a href="{{.Path}}">{{.ShortName}}</a>{{end}}</nav>{{end}}`))
@@ -310,20 +308,6 @@ func (admin *adminServer) feedbackDetail(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	http.NotFound(w, r)
-}
-
-func (admin *adminServer) gameplay(w http.ResponseWriter, _ *http.Request) {
-	data := admin.pageData()
-	if admin.store != nil {
-		records, err := admin.store.gameplay()
-		if err != nil {
-			adminReadError(w)
-			return
-		}
-		data.GameplayCount = len(records)
-		data.Gameplay = latestRecords(records)
-	}
-	executeAdminTemplate(w, adminGameplayTemplate, data)
 }
 
 func (admin *adminServer) performance(w http.ResponseWriter, _ *http.Request) {

@@ -1,9 +1,20 @@
 # antistatic-server
-Lobby coordination server for [Antistatic](https://antistaticgame.com/), the uncompromising platform fighter by bluehexagons.
+
+Low-overhead lobby, matchmaking, peer-introduction, and bounded reporting
+server with a bundled profile for
+[Antistatic](https://antistaticgame.com/), the uncompromising platform fighter
+by bluehexagons.
+
+The coordination core is designed to be straightforward to adapt in a source
+fork. It uses ordinary typed Go configuration and a few conspicuous
+game-specific files rather than plugins, runtime dispatch, or a matchmaking
+rule language. See [FORKING.md](FORKING.md) for the complete adaptation
+checklist.
 
 Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 
 ## Features
+
 - IPv4 and IPv6 support
 - Keyed lobby and random matchmaking endpoints
 - Match-by-code tag leases for private quick matches
@@ -18,6 +29,7 @@ Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 - TLS-only authenticated report administration
 
 ## Basic use
+
 By default, running `antistatic-server` will run on port 80 without enabling HTTPS.
 This is suitable only for public health/events and local development. Report
 endpoints require HTTPS (except loopback development requests), and deployments
@@ -67,12 +79,14 @@ conspicuous files:
   compatible-ticket policy, and host/client role assignment.
 - `antistatic_reports.go` owns the game-specific gameplay metric schema,
   validation, and ingestion handler.
+- `antistatic_admin.go` owns the corresponding retained-record presentation.
 
 The generic lobby lifecycle, peer endpoint disclosure, ticket ownership,
 storage mechanics, and HTTP plumbing remain in their ordinary source files.
 Changing a wire shape also requires updating `protocol/openapi.json`, its
 shared fixtures, and regenerating `protocol/index.d.ts` with `npm run
-generate`.
+generate`. The step-by-step source, client, test, and release workflow is in
+[FORKING.md](FORKING.md).
 
 By default, HTTPS support looks for `cert.key` and `cert.crt` in the working directory.
 Use `-cert path` and `-key path` to specify custom locations.
