@@ -27,6 +27,21 @@ func TestRecurringQueueEventsUseStableUTCSchedule(t *testing.T) {
 	}
 }
 
+func TestRecurringQueueEventRemainsActiveAcrossUTCMidnight(t *testing.T) {
+	definition := QueueEventConfig{
+		ID: "late-saturday", Name: "Late Saturday", Region: "global",
+		Weekday: ConfigWeekday(time.Saturday), StartHourUTC: 23, StartMinuteUTC: 30,
+		Duration: ConfigDuration(2 * time.Hour),
+	}
+	now := time.Date(2026, time.July, 19, 0, 30, 0, 0, time.UTC) // Sunday
+
+	event := nextRecurringEvent(definition, now)
+	wantStart := time.Date(2026, time.July, 18, 23, 30, 0, 0, time.UTC)
+	if !event.Active || !event.StartsAtUTC.Equal(wantStart) || !event.EndsAtUTC.Equal(wantStart.Add(2*time.Hour)) {
+		t.Fatalf("cross-midnight event = %#v, want active occurrence starting %v", event, wantStart)
+	}
+}
+
 func TestEventsHandler(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/events", nil)

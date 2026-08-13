@@ -32,7 +32,10 @@ func nextRecurringEvent(def QueueEventConfig, now time.Time) recurringQueueEvent
 	date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	duration := def.Duration.Duration()
 	var start time.Time
-	for offset := 0; offset <= 7; offset++ {
+	// A recurring event may start late on the previous UTC day and remain
+	// active after midnight. Durations are capped at 24 hours, so looking back
+	// one day is sufficient before searching for the next occurrence.
+	for offset := -1; offset <= 7; offset++ {
 		candidateDate := date.AddDate(0, 0, offset)
 		if candidateDate.Weekday() != def.Weekday.Weekday() {
 			continue

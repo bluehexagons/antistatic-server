@@ -129,6 +129,32 @@ func decodeMatchmakingResponse(t *testing.T, rec *httptest.ResponseRecorder) mat
 	return response
 }
 
+func TestMatchmakingMatchIDIsBoundedAndKeepsQueuePrefix(t *testing.T) {
+	short := matchmakingMatchID("0.9.5", "default", MatchParticipant{TicketID: "TicketA"}, MatchParticipant{TicketID: "TicketB"})
+	if short != "0.9.5|default|TicketA|TicketB" {
+		t.Fatalf("short match ID = %q, want readable components", short)
+	}
+
+	version := strings.Repeat("v", 64)
+	queue := strings.Repeat("q", 64)
+	first := MatchParticipant{TicketID: strings.Repeat("a", 64)}
+	second := MatchParticipant{TicketID: strings.Repeat("b", 64)}
+	id := matchmakingMatchID(version, queue, first, second)
+	if len(id) > maxMatchmakingMatchIDLength {
+		t.Fatalf("long match ID length = %d, want at most %d", len(id), maxMatchmakingMatchIDLength)
+	}
+	if !strings.HasPrefix(id, version+"|"+queue+"|") || strings.Count(id, "|") != 2 {
+		t.Fatalf("long match ID = %q, want version and queue followed by an opaque digest", id)
+	}
+	if again := matchmakingMatchID(version, queue, first, second); again != id {
+		t.Fatalf("long match ID is not deterministic: %q != %q", again, id)
+	}
+	second.TicketID = strings.Repeat("c", 64)
+	if changed := matchmakingMatchID(version, queue, first, second); changed == id {
+		t.Fatal("long match ID did not change with its participant")
+	}
+}
+
 func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	h := newTestLobbyHandler()
 	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})

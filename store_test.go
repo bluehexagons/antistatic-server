@@ -216,6 +216,48 @@ func TestReportStoreCompactionAppliesRetention(t *testing.T) {
 	if strings.Contains(string(data), old.ID) || strings.Contains(string(data), "not-json") {
 		t.Fatalf("compacted file retained expired/malformed data: %s", data)
 	}
+	if strings.Contains(string(data), current.EventID) {
+		t.Fatalf("compacted file persisted raw event ID: %s", data)
+	}
+}
+
+func TestReportStoreCompactionKeepsEventIDsOpaqueAndDropsExpiredMappings(t *testing.T) {
+	store, err := newReportStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := roundedStoreTime(time.Now())
+	store.now = func() time.Time { return now }
+	eventID := "random-event-id-compaction"
+	if _, _, err := store.appendCrash(validCrashRequest(eventID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Compact(now); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(store.collectionPath(crashCollection))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), eventID) {
+		t.Fatalf("compacted file persisted raw event ID: %s", data)
+	}
+	records, err := store.crashes()
+	if err != nil || len(records) != 1 || records[0].EventID != eventID {
+		t.Fatalf("records after compaction = %#v, %v, want restored event ID", records, err)
+	}
+	if got := len(store.eventDigests[crashCollection]); got != 1 {
+		t.Fatalf("event digest mappings after compaction = %d, want 1", got)
+	}
+
+	expiredAt := now.Add(crashRetention + storeTimePrecision)
+	store.now = func() time.Time { return expiredAt }
+	if err := store.Compact(expiredAt); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(store.eventDigests[crashCollection]); got != 0 {
+		t.Fatalf("event digest mappings after expiration = %d, want 0", got)
+	}
 }
 
 func TestMaintenanceCompactionRemovesExpiredDiskRecords(t *testing.T) {
@@ -354,6 +396,11 @@ func TestReportStoreAppendRollsBackFailures(t *testing.T) {
 			}
 			if _, _, err := store.appendCrash(validCrashRequest("random-event-failed")); err == nil {
 				t.Fatal("faulted append unexpectedly succeeded")
+			}
+			for _, eventID := range store.eventDigests[crashCollection] {
+				if eventID == "random-event-failed" {
+					t.Fatal("failed append retained a raw event ID mapping")
+				}
 			}
 			after, err := os.Stat(path)
 			if err != nil {

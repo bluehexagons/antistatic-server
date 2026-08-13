@@ -278,24 +278,27 @@ func (s *reportStore) deduplicatedLocked(collection storeCollection, eventID str
 
 func (s *reportStore) eventDigest(collection storeCollection, eventID string) string {
 	value := sha256.Sum256(append(append([]byte(string(collection)), s.eventDigestKey[:]...), []byte(eventID)...))
-	digest := hex.EncodeToString(value[:])
-	s.eventDigests[collection][digest] = eventID
-	return digest
+	return hex.EncodeToString(value[:])
 }
 
-func (s *reportStore) recordForStorage(collection storeCollection, record any) any {
+func (s *reportStore) recordForStorage(collection storeCollection, record any, digests map[string]string) any {
+	digestEventID := func(eventID string) string {
+		digest := s.eventDigest(collection, eventID)
+		digests[digest] = eventID
+		return digest
+	}
 	switch value := record.(type) {
 	case crashRecord:
-		value.EventID = s.eventDigest(collection, value.EventID)
+		value.EventID = digestEventID(value.EventID)
 		return value
 	case feedbackRecord:
-		value.EventID = s.eventDigest(collection, value.EventID)
+		value.EventID = digestEventID(value.EventID)
 		return value
 	case gameplayRecord:
-		value.EventID = s.eventDigest(collection, value.EventID)
+		value.EventID = digestEventID(value.EventID)
 		return value
 	case performanceRecord:
-		value.EventID = s.eventDigest(collection, value.EventID)
+		value.EventID = digestEventID(value.EventID)
 		return value
 	default:
 		return record
@@ -313,7 +316,8 @@ func (s *reportStore) appendJSONLocked(collection storeCollection, record any) e
 	if !s.enabled[collection] {
 		return errCollectionDisabled
 	}
-	line, err := json.Marshal(s.recordForStorage(collection, record))
+	digests := make(map[string]string, 1)
+	line, err := json.Marshal(s.recordForStorage(collection, record, digests))
 	if err != nil {
 		return err
 	}
@@ -359,6 +363,9 @@ func (s *reportStore) appendJSONLocked(collection storeCollection, record any) e
 	}
 	if err := file.Sync(); err != nil {
 		return rollbackAppend(file, originalSize, err)
+	}
+	for digest, eventID := range digests {
+		s.eventDigests[collection][digest] = eventID
 	}
 	s.counts[collection]++
 	return nil
@@ -670,8 +677,9 @@ func writeCompactedLocked[T any](s *reportStore, collection storeCollection, rec
 	}()
 	writer := bufio.NewWriter(temp)
 	encoder := json.NewEncoder(writer)
+	digests := make(map[string]string, len(records))
 	for _, record := range records {
-		if err := encoder.Encode(record); err != nil {
+		if err := encoder.Encode(s.recordForStorage(collection, record, digests)); err != nil {
 			return err
 		}
 	}
@@ -687,6 +695,7 @@ func writeCompactedLocked[T any](s *reportStore, collection storeCollection, rec
 	if err := os.Rename(temp.Name(), path); err != nil {
 		return err
 	}
+	s.eventDigests[collection] = digests
 	if err := os.Chmod(path, 0o600); err != nil {
 		return err
 	}

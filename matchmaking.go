@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ const maxMatchmakingMatches = 10000
 const maxMatchmakingQueues = 10000
 const maxMatchmakingTagLeases = maxMatchmakingTickets
 const maxMatchmakingTagLeasesPerIP = 8
+const maxMatchmakingMatchIDLength = 256
 const matchCodeQueuePrefix = "code."
 
 // Long-poll bound for PUT requests that opt in via the ?wait= query
@@ -307,7 +309,12 @@ func normalizeMatchmakingTags(tags *matchmakingTagPair, queue string) (*matchmak
 }
 
 func matchmakingMatchID(version, queue string, first, second MatchParticipant) string {
-	return fmt.Sprintf("%s|%s|%s|%s", version, queue, first.TicketID, second.TicketID)
+	id := fmt.Sprintf("%s|%s|%s|%s", version, queue, first.TicketID, second.TicketID)
+	if len(id) <= maxMatchmakingMatchIDLength {
+		return id
+	}
+	digest := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("%s|%s|%x", version, queue, digest)
 }
 
 func (t *MatchmakingTicket) waiting(now time.Time, timeout time.Duration) bool {
