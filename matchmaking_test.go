@@ -72,7 +72,7 @@ func decodeMatchmakingResponse(t *testing.T, rec *httptest.ResponseRecorder) mat
 
 func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	h := newTestLobbyHandler()
-	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT returned status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -101,9 +101,9 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 
 func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	firstResponse := decodeMatchmakingResponse(t, first)
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	if second.Code != http.StatusOK || decodeMatchmakingResponse(t, second).Status != "matched" {
 		t.Fatalf("second ticket did not match: status=%d body=%s", second.Code, second.Body.String())
 	}
@@ -178,9 +178,9 @@ func TestNetplayReportPersistenceAndFailureIsolation(t *testing.T) {
 	t.Cleanup(store.Close)
 	h := newTestLobbyHandler()
 	h.Store = store
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	firstResponse := decodeMatchmakingResponse(t, first)
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	if second.Code != http.StatusOK || decodeMatchmakingResponse(t, second).Status != "matched" {
 		t.Fatalf("second ticket did not match: %d %s", second.Code, second.Body.String())
 	}
@@ -289,12 +289,12 @@ func waitForTestCondition(t *testing.T, condition func() bool) {
 func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 	h := newTestLobbyHandler()
 	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{
-		Character:      "Carbon",
+		Metadata:       matchmakingMetadata{Character: "Carbon"},
 		LocalIPs:       []string{"192.168.1.10"},
 		LocalEndpoints: []Endpoint{{IP: "192.168.1.10", Port: 45860}},
 	})
 	firstResponse := decodeMatchmakingResponse(t, first)
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	if second.Code != http.StatusOK {
 		t.Fatalf("second ticket did not match: status=%d body=%s", second.Code, second.Body.String())
 	}
@@ -309,7 +309,7 @@ func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 	if len(h.Matches) != 0 || len(h.Tickets) != 2 {
 		t.Fatalf("post-match cleanup retained matches/tickets = %d/%d, want 0/2", len(h.Matches), len(h.Tickets))
 	}
-	if ticket == nil || ticket.Character != "" || len(ticket.Endpoints) != 0 || len(ticket.LocalIPs) != 0 || len(ticket.LocalEndpoints) != 0 {
+	if ticket == nil || ticket.Metadata.Character != "" || len(ticket.Endpoints) != 0 || len(ticket.LocalIPs) != 0 || len(ticket.LocalEndpoints) != 0 {
 		t.Fatalf("retained report ticket still contains matchmaking metadata: %#v", ticket)
 	}
 	h.Mu.Unlock()
@@ -345,9 +345,9 @@ func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 
 func TestMatchedTicketRefreshDoesNotExtendReportRetention(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	firstResponse := decodeMatchmakingResponse(t, first)
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	if second.Code != http.StatusOK {
 		t.Fatalf("second ticket did not match: status=%d body=%s", second.Code, second.Body.String())
 	}
@@ -363,7 +363,7 @@ func TestMatchedTicketRefreshDoesNotExtendReportRetention(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketA/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		firstResponse.Token,
 	)
 	if refresh.Code != http.StatusOK {
@@ -401,7 +401,7 @@ func TestMatchmakingCapacityIgnoresExpiredMatchReportTickets(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/ActiveTicket/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 	)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("active ticket rejected with report-retained capacity full: %d: %s", rec.Code, rec.Body.String())
@@ -410,7 +410,7 @@ func TestMatchmakingCapacityIgnoresExpiredMatchReportTickets(t *testing.T) {
 
 func TestMatchmakingWaitingResponseIncludesQueueWaits(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 
 	h.Mu.Lock()
@@ -437,7 +437,7 @@ func TestMatchmakingWaitingResponseIncludesQueueWaits(t *testing.T) {
 
 func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 
 	key := matchmakingTicketKey("0.9.5", "default", "TicketA")
@@ -446,7 +446,7 @@ func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 	before := h.Tickets[key].CheckedIn
 	h.Mu.Unlock()
 
-	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"}, token)
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, token)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("refresh returned status %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -465,7 +465,7 @@ func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 
 func TestMatchmakingRefreshUpdatesEndpoint(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 
 	rec := serveMatchmakingRequestWithToken(
@@ -473,7 +473,7 @@ func TestMatchmakingRefreshUpdatesEndpoint(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketA/45861",
 		"198.51.100.11:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		token,
 	)
 	if rec.Code != http.StatusOK {
@@ -490,14 +490,14 @@ func TestMatchmakingRefreshUpdatesEndpoint(t *testing.T) {
 
 func TestMatchmakingRefreshRejectsWrongToken(t *testing.T) {
 	h := newTestLobbyHandler()
-	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 
 	rec := serveMatchmakingRequestWithToken(
 		h,
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketA/45861",
 		"198.51.100.11:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		"wrong-token",
 	)
 	if rec.Code != http.StatusForbidden {
@@ -514,11 +514,11 @@ func TestMatchmakingRefreshRejectsWrongToken(t *testing.T) {
 
 func TestMatchmakingOldTokenCannotRecreateDeletedTicket(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 	_ = serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
 
-	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"}, token)
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, token)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("old-token PUT returned %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -531,14 +531,14 @@ func TestMatchmakingOldTokenCannotRecreateDeletedTicket(t *testing.T) {
 
 func TestMatchmakingExpiredTicketCannotRefresh(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 	key := matchmakingTicketKey("0.9.5", "default", "TicketA")
 	h.Mu.Lock()
 	h.Tickets[key].CheckedIn = time.Now().Add(-matchmakingTicketTimeout - time.Second)
 	h.Mu.Unlock()
 
-	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45861", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"}, token)
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45861", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, token)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expired refresh returned %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -552,12 +552,12 @@ func TestMatchmakingExpiredTicketCannotRefresh(t *testing.T) {
 func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 	h := newTestLobbyHandler()
 
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	if first.Code != http.StatusOK {
 		t.Fatalf("first PUT returned %d", first.Code)
 	}
 
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	if second.Code != http.StatusOK {
 		t.Fatalf("second PUT returned %d", second.Code)
 	}
@@ -569,7 +569,7 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 	if response.Match.Role != "client" {
 		t.Fatalf("second ticket role = %q, want client", response.Match.Role)
 	}
-	if response.Match.Peer.Character != "Carbon" || response.Match.Self.Character != "Silicon" {
+	if response.Match.Peer.Metadata.Character != "Carbon" || response.Match.Self.Metadata.Character != "Silicon" {
 		t.Fatalf("match characters = %#v, want Carbon vs Silicon", response.Match)
 	}
 	if response.Queue == nil || response.Queue.MatchCount != 1 || response.Queue.AverageMatchWaitMs < 0 {
@@ -593,7 +593,7 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 
 func TestMatchmakingCodeQueueRequiresValidTagHeaders(t *testing.T) {
 	h := newTestLobbyHandler()
-	body := matchmakingRequest{Character: "Carbon"}
+	body := matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}
 
 	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860", "198.51.100.10:32000", body)
 	if rec.Code != http.StatusBadRequest {
@@ -639,7 +639,7 @@ func TestMatchmakingCodeQueueLeasesTagsAndMatchesReciprocalSearch(t *testing.T) 
 		http.MethodPut,
 		"/0.9.5/matchmaking/CODE.BRAVO2-ALPHA1/TicketA/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		"",
 		"alpha1",
 		"bravo2",
@@ -666,7 +666,7 @@ func TestMatchmakingCodeQueueLeasesTagsAndMatchesReciprocalSearch(t *testing.T) 
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
 		"198.51.100.20:32000",
-		matchmakingRequest{Character: "Silicon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}},
 		"",
 		"BRAVO2",
 		"ALPHA1",
@@ -679,7 +679,7 @@ func TestMatchmakingCodeQueueLeasesTagsAndMatchesReciprocalSearch(t *testing.T) 
 	if secondResp.Status != "matched" || secondResp.Match == nil {
 		t.Fatalf("second code response = %#v, want matched", secondResp)
 	}
-	if secondResp.Match.Role != "client" || secondResp.Match.Peer.Character != "Carbon" || secondResp.Match.Self.Character != "Silicon" {
+	if secondResp.Match.Role != "client" || secondResp.Match.Peer.Metadata.Character != "Carbon" || secondResp.Match.Self.Metadata.Character != "Silicon" {
 		t.Fatalf("code match = %#v, want reciprocal Carbon/Silicon match", secondResp.Match)
 	}
 
@@ -698,7 +698,7 @@ func TestMatchmakingCodeTagLeaseRejectsDifferentToken(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -713,7 +713,7 @@ func TestMatchmakingCodeTagLeaseRejectsDifferentToken(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
 		"198.51.100.20:32000",
-		matchmakingRequest{Character: "Silicon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -738,7 +738,7 @@ func TestMatchmakingCodeTagLeasePersistsAfterDeleteForSameToken(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -764,7 +764,7 @@ func TestMatchmakingCodeTagLeasePersistsAfterDeleteForSameToken(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
 		"198.51.100.20:32000",
-		matchmakingRequest{Character: "Silicon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -779,7 +779,7 @@ func TestMatchmakingCodeTagLeasePersistsAfterDeleteForSameToken(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
 		"198.51.100.20:32000",
-		matchmakingRequest{Character: "Silicon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -798,7 +798,7 @@ func TestMatchmakingCodeTagLeaseExpiresAfterTimeout(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -819,7 +819,7 @@ func TestMatchmakingCodeTagLeaseExpiresAfterTimeout(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketB/45861",
 		"198.51.100.20:32000",
-		matchmakingRequest{Character: "Silicon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -838,7 +838,7 @@ func TestMatchmakingCodeTagLeaseRefreshExtendsExpiry(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -860,7 +860,7 @@ func TestMatchmakingCodeTagLeaseRefreshExtendsExpiry(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		firstResp.Token,
 		"ALPHA1",
 		"BRAVO2",
@@ -889,7 +889,7 @@ func TestMatchmakingCodeTagLeaseCapsLeasesPerIP(t *testing.T) {
 			http.MethodPut,
 			fmt.Sprintf("/0.9.5/matchmaking/code.%s-%s/Ticket%d/45860", strings.ToLower(selfTag), strings.ToLower(peerTag), i),
 			"198.51.100.10:32000",
-			matchmakingRequest{Character: "Carbon"},
+			matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 			"",
 			selfTag,
 			peerTag,
@@ -905,7 +905,7 @@ func TestMatchmakingCodeTagLeaseCapsLeasesPerIP(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.a999-z999/Ticket9/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		"",
 		"A999",
 		"Z999",
@@ -923,7 +923,7 @@ func TestMatchmakingCodeTagLeaseRefreshRespectsNewIPCap(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		"",
 		"ALPHA1",
 		"BRAVO2",
@@ -942,7 +942,7 @@ func TestMatchmakingCodeTagLeaseRefreshRespectsNewIPCap(t *testing.T) {
 			http.MethodPut,
 			fmt.Sprintf("/0.9.5/matchmaking/code.%s-%s/Ticket%d/45860", strings.ToLower(selfTag), strings.ToLower(peerTag), i),
 			"198.51.100.20:32000",
-			matchmakingRequest{Character: "Carbon"},
+			matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 			"",
 			selfTag,
 			peerTag,
@@ -958,7 +958,7 @@ func TestMatchmakingCodeTagLeaseRefreshRespectsNewIPCap(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860",
 		"198.51.100.20:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		firstResponse.Token,
 		"ALPHA1",
 		"BRAVO2",
@@ -978,7 +978,7 @@ func TestMatchmakingCodeTagLeaseRefreshRespectsNewIPCap(t *testing.T) {
 func TestMatchmakingPutLongPollWakesOnMatch(t *testing.T) {
 	h := newTestLobbyHandler()
 
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	if first.Code != http.StatusOK {
 		t.Fatalf("initial PUT returned %d: %s", first.Code, first.Body.String())
 	}
@@ -992,7 +992,7 @@ func TestMatchmakingPutLongPollWakesOnMatch(t *testing.T) {
 			http.MethodPut,
 			"/0.9.5/matchmaking/default/TicketA/45860?wait=2",
 			"198.51.100.10:32000",
-			matchmakingRequest{Character: "Carbon"},
+			matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 			tokenA,
 		)
 	}()
@@ -1000,7 +1000,7 @@ func TestMatchmakingPutLongPollWakesOnMatch(t *testing.T) {
 	// Give the goroutine a chance to enter the long-poll wait, then register
 	// a compatible ticket so the long-poller's next check sees the match.
 	time.Sleep(150 * time.Millisecond)
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	if second.Code != http.StatusOK {
 		t.Fatalf("second PUT returned %d: %s", second.Code, second.Body.String())
 	}
@@ -1032,7 +1032,7 @@ func TestMatchmakingInitialPutLongPollWakesOnMatch(t *testing.T) {
 			http.MethodPut,
 			"/0.9.5/matchmaking/default/TicketA/45860?wait=2",
 			"198.51.100.10:32000",
-			matchmakingRequest{Character: "Carbon"},
+			matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		)
 	}()
 
@@ -1051,7 +1051,7 @@ func TestMatchmakingInitialPutLongPollWakesOnMatch(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	if second.Code != http.StatusOK {
 		t.Fatalf("second PUT returned %d: %s", second.Code, second.Body.String())
 	}
@@ -1073,7 +1073,7 @@ func TestMatchmakingInitialPutLongPollWakesOnMatch(t *testing.T) {
 func TestMatchmakingPutLongPollBroadcastsMatchToConcurrentWaiters(t *testing.T) {
 	h := newTestLobbyHandler()
 
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	if first.Code != http.StatusOK {
 		t.Fatalf("initial PUT returned %d: %s", first.Code, first.Body.String())
 	}
@@ -1088,14 +1088,14 @@ func TestMatchmakingPutLongPollBroadcastsMatchToConcurrentWaiters(t *testing.T) 
 				http.MethodPut,
 				"/0.9.5/matchmaking/default/TicketA/45860?wait=2",
 				"198.51.100.10:32000",
-				matchmakingRequest{Character: "Carbon"},
+				matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 				tokenA,
 			)
 		}()
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	if second.Code != http.StatusOK {
 		t.Fatalf("second PUT returned %d: %s", second.Code, second.Body.String())
 	}
@@ -1120,7 +1120,7 @@ func TestMatchmakingPutLongPollBroadcastsMatchToConcurrentWaiters(t *testing.T) 
 func TestMatchmakingPutLongPollTimesOut(t *testing.T) {
 	h := newTestLobbyHandler()
 
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	if first.Code != http.StatusOK {
 		t.Fatalf("initial PUT returned %d: %s", first.Code, first.Body.String())
 	}
@@ -1132,7 +1132,7 @@ func TestMatchmakingPutLongPollTimesOut(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketA/45860?wait=1",
 		"198.51.100.10:32000",
-		matchmakingRequest{Character: "Carbon"},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
 		tokenA,
 	)
 	elapsed := time.Since(started)
@@ -1150,11 +1150,11 @@ func TestMatchmakingPutLongPollTimesOut(t *testing.T) {
 
 func TestMatchmakingPutLongPollReturnsDeletion(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860?wait=2", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"}, token)
+		done <- serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860?wait=2", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, token)
 	}()
 	time.Sleep(100 * time.Millisecond)
 	deleted := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
@@ -1176,8 +1176,8 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 		"/0.9.5/matchmaking/default/TicketA/45860",
 		"203.0.113.5:32000",
 		matchmakingRequest{
-			Character: "Carbon",
-			LocalIPs:  []string{"8.8.8.8", "192.168.1.20"},
+			Metadata: matchmakingMetadata{Character: "Carbon"},
+			LocalIPs: []string{"8.8.8.8", "192.168.1.20"},
 			LocalEndpoints: []Endpoint{
 				{IP: "8.8.8.8", Port: 45860},
 				{IP: "10.0.0.99", Port: 45860},
@@ -1196,7 +1196,7 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketB/45861",
 		"203.0.113.5:32001",
-		matchmakingRequest{Character: "Silicon", LocalIPs: []string{"10.0.0.20"}},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}, LocalIPs: []string{"10.0.0.20"}},
 	)
 	response := decodeMatchmakingResponse(t, second)
 	if response.Status != "matched" || response.Match == nil {
@@ -1216,7 +1216,7 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 		"/0.9.5/matchmaking/default/TicketC/45862",
 		"203.0.113.6:32002",
 		matchmakingRequest{
-			Character:      "Carbon",
+			Metadata:       matchmakingMetadata{Character: "Carbon"},
 			LocalIPs:       []string{"192.168.2.20"},
 			LocalEndpoints: []Endpoint{{IP: "192.168.2.20", Port: 45862}},
 		},
@@ -1230,7 +1230,7 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 		http.MethodPut,
 		"/0.9.5/matchmaking/default/TicketD/45863",
 		"203.0.113.7:32003",
-		matchmakingRequest{Character: "Silicon", LocalIPs: []string{"192.168.3.20"}},
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}, LocalIPs: []string{"192.168.3.20"}},
 	)
 	response = decodeMatchmakingResponse(t, fourth)
 	if response.Status != "matched" || response.Match == nil {
@@ -1246,8 +1246,8 @@ func TestMatchmakingReflectsLocalIPsOnlyToSamePublicIP(t *testing.T) {
 
 func TestMatchmakingDoesNotMatchSameEndpoint(t *testing.T) {
 	h := newTestLobbyHandler()
-	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
-	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Silicon"})
+	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
+	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT returned %d", rec.Code)
@@ -1267,7 +1267,7 @@ func TestMatchmakingDoesNotMatchSameEndpoint(t *testing.T) {
 
 func TestMatchmakingDeleteRemovesWaitingTicket(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 	rec := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
 
@@ -1289,9 +1289,9 @@ func TestMatchmakingDeleteRemovesWaitingTicket(t *testing.T) {
 
 func TestMatchmakingDeleteMatchedTicketRetainsPeerReportState(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	firstResponse := decodeMatchmakingResponse(t, first)
-	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Character: "Silicon"})
+	second := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketB/45861", "198.51.100.20:32001", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}})
 	secondResponse := decodeMatchmakingResponse(t, second)
 	if secondResponse.Status != "matched" {
 		t.Fatalf("second ticket = %#v, want matched", secondResponse)
@@ -1321,7 +1321,7 @@ func TestMatchmakingDeleteMatchedTicketRetainsPeerReportState(t *testing.T) {
 
 func TestMatchmakingDeleteRejectsWrongToken(t *testing.T) {
 	h := newTestLobbyHandler()
-	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	rec := serveMatchmakingRequestWithToken(h, http.MethodDelete, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, "wrong-token")
 
 	if rec.Code != http.StatusForbidden {
@@ -1337,7 +1337,7 @@ func TestMatchmakingDeleteRejectsWrongToken(t *testing.T) {
 
 func TestMatchmakingStateRejectsWrongToken(t *testing.T) {
 	h := newTestLobbyHandler()
-	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 
 	rec := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, "wrong-token")
@@ -1353,7 +1353,7 @@ func TestMatchmakingStateRejectsWrongToken(t *testing.T) {
 
 func TestMatchmakingCleanupDropsStaleTickets(t *testing.T) {
 	h := newTestLobbyHandler()
-	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	_ = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 
 	h.Mu.Lock()
 	for _, ticket := range h.Tickets {
@@ -1371,12 +1371,12 @@ func TestMatchmakingCleanupDropsStaleTickets(t *testing.T) {
 
 func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 	h := newTestLobbyHandler()
-	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/bad!queue/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Carbon"})
+	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/bad!queue/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid queue status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 
-	rec = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Character: "Bad;Character"})
+	rec = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Bad;Character"}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid character status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -1384,7 +1384,7 @@ func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 		t.Fatalf("client error counter = %d, want > 0", got)
 	}
 
-	rec = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", json.RawMessage(`{"character":"Carbon"} {}`))
+	rec = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", json.RawMessage(`{"metadata":{"character":"Carbon"}} {}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("trailing JSON status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}

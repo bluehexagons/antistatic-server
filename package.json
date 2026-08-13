@@ -1,0 +1,27 @@
+{
+  "name": "@bluehexagons/antistatic-server-protocol",
+  "version": "0.11.0-dev.1",
+  "description": "TypeScript declarations for the antistatic-server HTTP protocol",
+  "license": "MIT",
+  "type": "module",
+  "types": "./protocol/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./protocol/index.d.ts"
+    }
+  },
+  "files": [
+    "protocol/index.d.ts",
+    "protocol/README.md"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit -p protocol/tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=26.4.0",
+    "npm": ">=11.18.0"
+  }
+}

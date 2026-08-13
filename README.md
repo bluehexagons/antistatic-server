@@ -407,7 +407,9 @@ response.
 ### Matchmaking PUT Body
 ```json
 {
-  "character": "Carbon",
+  "metadata": {
+    "character": "Carbon"
+  },
   "local_ips": ["192.168.1.20", "10.0.0.20"],
   "local_endpoints": [
     {"ip": "192.168.1.20", "port": 45860}
@@ -415,7 +417,13 @@ response.
 }
 ```
 
-The local fields follow the same sanitization and visibility rules as lobby check-ins. They let same-NAT or same-host clients try LAN/loopback tunnel candidates without exposing local addresses to unrelated WAN peers.
+`metadata` is the small game-specific part of the matchmaking contract. The
+bundled Antistatic profile currently requires one bounded `character` string;
+the server otherwise treats matching, endpoint exchange, and ticket lifecycle
+as generic coordination. The local fields follow the same sanitization and
+visibility rules as lobby check-ins. They let same-NAT or same-host clients try
+LAN/loopback tunnel candidates without exposing local addresses to unrelated
+WAN peers.
 
 For Match by Code queues (`code.<tag>-<tag>`), clients also send:
 
@@ -524,13 +532,13 @@ instant stable when local daylight-saving rules change.
       "endpoints": [
         {"ip": "198.51.100.20", "port": 45861}
       ],
-      "character": "Silicon"
+      "metadata": {"character": "Silicon"}
     },
     "self": {
       "endpoints": [
         {"ip": "198.51.100.10", "port": 45860}
       ],
-      "character": "Carbon"
+      "metadata": {"character": "Carbon"}
     }
   }
 }

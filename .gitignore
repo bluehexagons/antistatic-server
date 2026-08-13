@@ -13,6 +13,10 @@ antistatic-server
 
 # Dependency directories
 vendor/
+node_modules/
+
+# Package archives
+*.tgz
 
 # Go workspace file
 go.work

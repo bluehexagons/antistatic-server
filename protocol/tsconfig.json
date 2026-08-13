@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "strict": true,
+    "target": "ESNext"
+  },
+  "files": ["index.d.ts", "typecheck.ts"]
+}

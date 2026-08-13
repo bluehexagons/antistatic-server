@@ -32,20 +32,20 @@ const antistaticReportIDHeader = "X-Antistatic-Report-ID"
 const maxMatchmakingLongPoll = 10 * time.Second
 
 type MatchmakingTicket struct {
-	ID             string     `json:"id"`
-	Version        string     `json:"version"`
-	Queue          string     `json:"queue"`
-	Endpoints      []Endpoint `json:"endpoints"`
-	Token          string     `json:"-"`
-	TagToken       string     `json:"-"`
-	SelfTag        string     `json:"-"`
-	PeerTag        string     `json:"-"`
-	Character      string     `json:"character"`
-	LocalIPs       []string   `json:"local_ips,omitempty"`
-	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	CheckedIn      time.Time  `json:"checked_in"`
-	MatchedID      string     `json:"matched_id"`
+	ID             string              `json:"id"`
+	Version        string              `json:"version"`
+	Queue          string              `json:"queue"`
+	Endpoints      []Endpoint          `json:"endpoints"`
+	Token          string              `json:"-"`
+	TagToken       string              `json:"-"`
+	SelfTag        string              `json:"-"`
+	PeerTag        string              `json:"-"`
+	Metadata       matchmakingMetadata `json:"metadata"`
+	LocalIPs       []string            `json:"local_ips,omitempty"`
+	LocalEndpoints []Endpoint          `json:"local_endpoints,omitempty"`
+	CreatedAt      time.Time           `json:"created_at"`
+	CheckedIn      time.Time           `json:"checked_in"`
+	MatchedID      string              `json:"matched_id"`
 	stateChanged   chan struct{}
 	changeNotified bool
 	reportedEvents uint8
@@ -122,7 +122,7 @@ func (t *MatchmakingTicket) notifyStateChangedLocked() {
 // game-report endpoint.
 func (t *MatchmakingTicket) scrubForReportRetention() {
 	t.Endpoints = nil
-	t.Character = ""
+	t.Metadata = matchmakingMetadata{}
 	t.LocalIPs = nil
 	t.LocalEndpoints = nil
 	t.TagToken = ""
@@ -134,7 +134,7 @@ func (t *MatchmakingTicket) scrubForReportRetention() {
 type MatchParticipant struct {
 	TicketID       string
 	Endpoints      []Endpoint
-	Character      string
+	Metadata       matchmakingMetadata
 	LocalIPs       []string
 	LocalEndpoints []Endpoint
 	Role           string
@@ -159,10 +159,10 @@ type MatchmakingQueue struct {
 }
 
 type matchmakingPeer struct {
-	Endpoints      []Endpoint `json:"endpoints"`
-	Character      string     `json:"character"`
-	LocalIPs       []string   `json:"local_ips,omitempty"`
-	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
+	Endpoints      []Endpoint          `json:"endpoints"`
+	Metadata       matchmakingMetadata `json:"metadata"`
+	LocalIPs       []string            `json:"local_ips,omitempty"`
+	LocalEndpoints []Endpoint          `json:"local_endpoints,omitempty"`
 }
 
 type matchmakingMatchResponse struct {
@@ -202,9 +202,17 @@ type matchmakingResponse struct {
 }
 
 type matchmakingRequest struct {
-	Character      string     `json:"character"`
-	LocalIPs       []string   `json:"local_ips,omitempty"`
-	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
+	Metadata       matchmakingMetadata `json:"metadata"`
+	LocalIPs       []string            `json:"local_ips,omitempty"`
+	LocalEndpoints []Endpoint          `json:"local_endpoints,omitempty"`
+}
+
+// matchmakingMetadata is the deliberately small game-specific part of the
+// otherwise generic peer-introduction contract. A source-level adaptation can
+// replace this typed struct and its validator without changing matchmaking,
+// ownership, or NAT traversal code.
+type matchmakingMetadata struct {
+	Character string `json:"character"`
 }
 
 type gameReportRequest struct {
@@ -342,11 +350,11 @@ func (m *Match) responseFor(ticketID string) *matchmakingMatchResponse {
 		Role: self.Role,
 		Self: matchmakingPeer{
 			Endpoints: append([]Endpoint(nil), self.Endpoints...),
-			Character: self.Character,
+			Metadata:  self.Metadata,
 		},
 		Peer: matchmakingPeer{
 			Endpoints: append([]Endpoint(nil), peer.Endpoints...),
-			Character: peer.Character,
+			Metadata:  peer.Metadata,
 		},
 		MatchedAtMs: m.CreatedAt.UnixMilli(),
 	}
@@ -571,7 +579,7 @@ func (h *lobbyHandler) refreshMatchmakingTagLeaseLocked(ticket *MatchmakingTicke
 	return status
 }
 
-func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, character, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, now time.Time) (*matchmakingResponse, int) {
+func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, metadata matchmakingMetadata, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	h.cleanupMatchmakingLocked(now)
 	key := matchmakingTicketKey(version, queue, ticketID)
@@ -579,7 +587,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		if token == "" || token != existing.Token {
 			return nil, http.StatusForbidden
 		}
-		if existing.MatchedID == "" && existing.Character != character {
+		if existing.MatchedID == "" && existing.Metadata != metadata {
 			return h.matchmakingTicketResponseLocked("conflict", existing, now), http.StatusConflict
 		}
 		if existing.MatchedID != "" {
@@ -658,7 +666,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		TagToken:       "",
 		SelfTag:        "",
 		PeerTag:        "",
-		Character:      character,
+		Metadata:       metadata,
 		LocalIPs:       localIPs,
 		LocalEndpoints: localEndpoints,
 		CreatedAt:      now,
@@ -737,7 +745,7 @@ func (t *MatchmakingTicket) participantForMatch() MatchParticipant {
 	return MatchParticipant{
 		TicketID:       t.ID,
 		Endpoints:      append([]Endpoint(nil), t.Endpoints...),
-		Character:      t.Character,
+		Metadata:       t.Metadata,
 		LocalIPs:       append([]string(nil), t.LocalIPs...),
 		LocalEndpoints: append([]Endpoint(nil), t.LocalEndpoints...),
 	}
@@ -1129,8 +1137,8 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 			h.respondError(w, "Invalid matchmaking request", http.StatusBadRequest)
 			return
 		}
-		if !validateMatchmakingCharacter(request.Character) {
-			h.respondError(w, "Invalid matchmaking character", http.StatusBadRequest)
+		if !validateMatchmakingCharacter(request.Metadata.Character) {
+			h.respondError(w, "Invalid matchmaking metadata", http.StatusBadRequest)
 			return
 		}
 		request.LocalIPs = sanitizeLocalIPs(request.LocalIPs)
@@ -1148,7 +1156,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	case http.MethodGet:
 		resp, status = h.matchmakingStateLocked(version, queue, ticket, token, now)
 	case http.MethodPut:
-		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Character, token, tags, request.LocalIPs, request.LocalEndpoints, now)
+		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Metadata, token, tags, request.LocalIPs, request.LocalEndpoints, now)
 	case http.MethodDelete:
 		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token)
 	default:
