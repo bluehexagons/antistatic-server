@@ -303,6 +303,7 @@ func (m *serverMetrics) snapshotActivity(now time.Time) activitySummary {
 }
 
 type lobbyHandler struct {
+	Config              Config
 	Mu                  sync.RWMutex
 	Lobbies             map[string]*Lobby
 	Tickets             map[string]*MatchmakingTicket
@@ -373,7 +374,7 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		RecentHTTPErrors:  httpErrors,
 		RecentGameErrors:  gameErrors,
 		Activity:          h.Metrics.snapshotActivity(time.Now()),
-		Events:            recurringQueueEvents(time.Now()),
+		Events:            h.recurringEvents(time.Now()),
 		Version:           serverVersion,
 	}
 	h.Mu.RUnlock()
@@ -383,6 +384,13 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 func (h *lobbyHandler) respondError(w http.ResponseWriter, msg string, status int) {
 	h.Metrics.recordError(msg, status)
 	http.Error(w, msg, status)
+}
+
+func (h *lobbyHandler) recurringEvents(now time.Time) []recurringQueueEvent {
+	if !h.Config.Features.Events {
+		return []recurringQueueEvent{}
+	}
+	return recurringQueueEvents(h.Config.Events, now)
 }
 
 func (h *lobbyHandler) Maintain() {
@@ -407,7 +415,7 @@ func (h *lobbyHandler) Maintain() {
 func (h *lobbyHandler) maintainAt(now time.Time) {
 	h.Mu.Lock()
 	for k, l := range h.Lobbies {
-		l.Clean()
+		l.Clean(now, h.Config.Timeouts.LobbyMember.Duration())
 		if len(l.Members) == 0 {
 			delete(h.Lobbies, k)
 			slog.Info("Lobby emptied (timeout)")
@@ -498,6 +506,10 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !h.Config.Features.MatchmakingReports {
+			h.respondError(w, "Not found", http.StatusNotFound)
+			return
+		}
 		port, err := strconv.Atoi(info[3])
 		if err != nil || !validatePort(port) {
 			h.respondError(w, "Invalid port", http.StatusBadRequest)
@@ -562,7 +574,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				slog.Info("Created lobby", "requestID", getRequestID(r), "version", version)
 			}
 		} else {
-			l.Clean()
+			l.Clean(time.Now(), h.Config.Timeouts.LobbyMember.Duration())
 		}
 
 		memberToken := token
@@ -639,6 +651,7 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 var handler = &lobbyHandler{
+	Config:    DefaultConfig(),
 	Lobbies:   map[string]*Lobby{},
 	Tickets:   map[string]*MatchmakingTicket{},
 	Waiting:   map[string]map[string]*MatchmakingTicket{},

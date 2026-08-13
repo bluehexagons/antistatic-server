@@ -44,7 +44,7 @@ func (l *Lobby) SnapshotFor(requesterIP string) *LobbySnapshot {
 	}
 }
 
-func (l *Lobby) Clean() {
+func (l *Lobby) Clean(now time.Time, memberTimeout time.Duration) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 
@@ -52,7 +52,6 @@ func (l *Lobby) Clean() {
 		return
 	}
 
-	now := time.Now()
 	valid := l.Members[:0]
 	for _, m := range l.Members {
 		if now.After(m.CheckedIn.Add(memberTimeout)) {

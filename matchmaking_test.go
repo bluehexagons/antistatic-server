@@ -302,7 +302,7 @@ func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 	now := time.Now()
 	h.Mu.Lock()
 	for _, match := range h.Matches {
-		match.CreatedAt = now.Add(-matchmakingMatchTimeout - time.Second)
+		match.CreatedAt = now.Add(-defaultMatchmakingMatchTimeout - time.Second)
 	}
 	h.cleanupMatchmakingLocked(now)
 	ticket := h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")]
@@ -324,7 +324,7 @@ func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 		t.Fatalf("retained runtime report status/header = %d/%q", rec.Code, rec.Header().Get(antistaticReportIDHeader))
 	}
 	h.Mu.Lock()
-	h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")].CheckedIn = now.Add(-matchmakingReportRetention - time.Second)
+	h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")].CheckedIn = now.Add(-defaultMatchmakingReportRetention - time.Second)
 	h.Mu.Unlock()
 	expired := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, firstResponse.Token)
 	if expired.Code != http.StatusNotFound {
@@ -333,7 +333,7 @@ func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 
 	h.Mu.Lock()
 	for _, retained := range h.Tickets {
-		retained.CheckedIn = now.Add(-matchmakingReportRetention - time.Second)
+		retained.CheckedIn = now.Add(-defaultMatchmakingReportRetention - time.Second)
 	}
 	h.cleanupMatchmakingLocked(now)
 	remaining := len(h.Tickets)
@@ -352,7 +352,7 @@ func TestMatchedTicketRefreshDoesNotExtendReportRetention(t *testing.T) {
 		t.Fatalf("second ticket did not match: status=%d body=%s", second.Code, second.Body.String())
 	}
 
-	oldCheckIn := time.Now().Add(-matchmakingReportRetention - time.Second)
+	oldCheckIn := time.Now().Add(-defaultMatchmakingReportRetention - time.Second)
 	h.Mu.Lock()
 	key := matchmakingTicketKey("0.9.5", "default", "TicketA")
 	h.Tickets[key].CheckedIn = oldCheckIn
@@ -442,7 +442,7 @@ func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 
 	key := matchmakingTicketKey("0.9.5", "default", "TicketA")
 	h.Mu.Lock()
-	h.Tickets[key].CheckedIn = time.Now().Add(-matchmakingTicketTimeout / 2)
+	h.Tickets[key].CheckedIn = time.Now().Add(-defaultMatchmakingTicketTimeout / 2)
 	before := h.Tickets[key].CheckedIn
 	h.Mu.Unlock()
 
@@ -535,7 +535,7 @@ func TestMatchmakingExpiredTicketCannotRefresh(t *testing.T) {
 	token := decodeMatchmakingResponse(t, first).Token
 	key := matchmakingTicketKey("0.9.5", "default", "TicketA")
 	h.Mu.Lock()
-	h.Tickets[key].CheckedIn = time.Now().Add(-matchmakingTicketTimeout - time.Second)
+	h.Tickets[key].CheckedIn = time.Now().Add(-defaultMatchmakingTicketTimeout - time.Second)
 	h.Mu.Unlock()
 
 	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45861", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, token)
@@ -810,7 +810,7 @@ func TestMatchmakingCodeTagLeaseExpiresAfterTimeout(t *testing.T) {
 
 	h.Mu.Lock()
 	for _, lease := range h.TagLeases {
-		lease.CheckedIn = time.Now().Add(-matchmakingTagLeaseTimeout - time.Second)
+		lease.CheckedIn = time.Now().Add(-defaultMatchmakingTagLeaseTimeout - time.Second)
 	}
 	h.Mu.Unlock()
 
@@ -851,7 +851,7 @@ func TestMatchmakingCodeTagLeaseRefreshExtendsExpiry(t *testing.T) {
 
 	h.Mu.Lock()
 	lease := h.TagLeases[matchmakingTagLeaseKey("0.9.5", "ALPHA1")]
-	lease.CheckedIn = time.Now().Add(-matchmakingTagLeaseTimeout / 2)
+	lease.CheckedIn = time.Now().Add(-defaultMatchmakingTagLeaseTimeout / 2)
 	before := lease.CheckedIn
 	h.Mu.Unlock()
 
@@ -1357,7 +1357,7 @@ func TestMatchmakingCleanupDropsStaleTickets(t *testing.T) {
 
 	h.Mu.Lock()
 	for _, ticket := range h.Tickets {
-		ticket.CheckedIn = time.Now().Add(-matchmakingTicketTimeout - time.Second)
+		ticket.CheckedIn = time.Now().Add(-defaultMatchmakingTicketTimeout - time.Second)
 	}
 	h.cleanupMatchmakingLocked(time.Now())
 	remainingTickets := len(h.Tickets)

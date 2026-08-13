@@ -12,6 +12,7 @@ type applicationConfig struct {
 	Store         *reportStore
 	AdminUsername string
 	AdminPassword string
+	Game          Config
 }
 
 type application struct {
@@ -27,10 +28,11 @@ func (app *application) Close() {
 	app.reportLimiter.Stop()
 }
 
-func applicationConfigFromEnv() (applicationConfig, error) {
+func applicationConfigFromEnv(game Config) (applicationConfig, error) {
 	config := applicationConfig{
 		AdminUsername: os.Getenv("ANTISTATIC_ADMIN_USERNAME"),
 		AdminPassword: os.Getenv("ANTISTATIC_ADMIN_PASSWORD"),
+		Game:          game,
 	}
 	if (config.AdminUsername == "") != (config.AdminPassword == "") {
 		return applicationConfig{}, errors.New("ANTISTATIC_ADMIN_USERNAME and ANTISTATIC_ADMIN_PASSWORD must both be set")
@@ -52,6 +54,13 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*appl
 	if lobby == nil {
 		return nil, errors.New("lobby handler is required")
 	}
+	if config.Game.SchemaVersion == 0 {
+		config.Game = DefaultConfig()
+	}
+	if err := validateConfig(config.Game); err != nil {
+		return nil, err
+	}
+	lobby.Config = config.Game
 	lobby.Store = config.Store
 	if config.Store != nil {
 		lobby.LastStoreCompaction = time.Now()
@@ -61,14 +70,24 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*appl
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { serveHealth(lobby, w, r) })
 	mux.HandleFunc("/health.html", func(w http.ResponseWriter, r *http.Request) { serveHealthHTML(lobby, w, r) })
-	mux.HandleFunc("/events", eventsHandler)
+	if config.Game.Features.Events {
+		mux.HandleFunc("/events", eventsHandler(config.Game.Events))
+	}
 	mux.HandleFunc("/robots.txt", robotsHandler)
-	mux.HandleFunc("/{version}/reports/crash", postOnly(api.crash))
-	mux.HandleFunc("/{version}/reports/feedback", postOnly(api.feedback))
-	mux.HandleFunc("/{version}/metrics/gameplay", postOnly(api.gameplay))
-	mux.HandleFunc("/{version}/metrics/performance", postOnly(api.performance))
+	if config.Game.Features.CrashReports {
+		mux.HandleFunc("/{version}/reports/crash", postOnly(api.crash))
+	}
+	if config.Game.Features.FeedbackReports {
+		mux.HandleFunc("/{version}/reports/feedback", postOnly(api.feedback))
+	}
+	if config.Game.Features.GameplayMetrics {
+		mux.HandleFunc("/{version}/metrics/gameplay", postOnly(api.gameplay))
+	}
+	if config.Game.Features.PerformanceMetrics {
+		mux.HandleFunc("/{version}/metrics/performance", postOnly(api.performance))
+	}
 	if config.AdminUsername != "" {
-		admin := newAdminHandler(config.Store, config.AdminUsername, config.AdminPassword)
+		admin := newAdminHandler(config.Store, config.AdminUsername, config.AdminPassword, config.Game.Service.Name)
 		mux.Handle("/admin", admin)
 		mux.Handle("/admin/", admin)
 	}

@@ -10,7 +10,7 @@ import (
 
 func TestRecurringQueueEventsUseStableUTCSchedule(t *testing.T) {
 	now := time.Date(2026, time.July, 18, 21, 30, 0, 0, time.UTC) // Saturday
-	events := recurringQueueEvents(now)
+	events := recurringQueueEvents(DefaultConfig().Events, now)
 	if len(events) != 2 {
 		t.Fatalf("events = %d, want 2", len(events))
 	}
@@ -21,7 +21,7 @@ func TestRecurringQueueEventsUseStableUTCSchedule(t *testing.T) {
 		t.Fatalf("Eurasia event = %#v, want next Sunday 18:00 UTC", events[1])
 	}
 
-	after := recurringQueueEvents(time.Date(2026, time.July, 18, 22, 0, 0, 0, time.UTC))
+	after := recurringQueueEvents(DefaultConfig().Events, time.Date(2026, time.July, 18, 22, 0, 0, 0, time.UTC))
 	if after[0].Active || !after[0].StartsAtUTC.Equal(time.Date(2026, time.July, 25, 21, 0, 0, 0, time.UTC)) {
 		t.Fatalf("event after end = %#v, want next Saturday", after[0])
 	}
@@ -30,7 +30,7 @@ func TestRecurringQueueEventsUseStableUTCSchedule(t *testing.T) {
 func TestEventsHandler(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/events", nil)
-	eventsHandler(rec, req)
+	eventsHandler(DefaultConfig().Events)(rec, req)
 	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "public, max-age=300" {
 		t.Fatalf("events response = status %d, cache %q", rec.Code, rec.Header().Get("Cache-Control"))
 	}

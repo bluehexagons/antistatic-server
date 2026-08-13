@@ -39,6 +39,7 @@ var trustProxy = false
 var trustedProxyCIDRs = ""
 var stunHost = ""
 var stunPort = 0
+var configPath = ""
 
 func listenAddress(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
@@ -81,10 +82,10 @@ var healthHTMLTemplate = template.Must(template.New("health").Parse(`<!doctype h
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Antistatic server health</title>
+  <title>{{.ServiceName}} server health</title>
 </head>
 <body>
-  <h1>Antistatic server health</h1>
+  <h1>{{.ServiceName}} server health</h1>
   <p>Status: <strong>{{.Status}}</strong> · Version: {{.Version}}</p>
   <p>Started: {{.StartTime.UTC}}</p>
 
@@ -145,7 +146,11 @@ func serveHealthHTML(lobby *lobbyHandler, w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := healthHTMLTemplate.Execute(w, lobby.healthResponse()); err != nil {
+	data := struct {
+		healthResponse
+		ServiceName string
+	}{healthResponse: lobby.healthResponse(), ServiceName: lobby.Config.Service.Name}
+	if err := healthHTMLTemplate.Execute(w, data); err != nil {
 		slog.Error("Health HTML response failed", "error", err)
 	}
 }
@@ -180,6 +185,7 @@ func main() {
 	flag.StringVar(&trustedProxyCIDRs, "trusted-proxy-cidrs", trustedProxyCIDRs, "Comma-separated CIDR allowlist for trusted reverse proxies")
 	flag.StringVar(&stunHost, "stun-host", stunHost, "Host to bind the built-in STUN responder (default: dual-stack any-address)")
 	flag.IntVar(&stunPort, "stun-port", stunPort, "UDP port for the built-in STUN responder (0 disables; conventional value is 3478)")
+	flag.StringVar(&configPath, "config", configPath, "Optional JSON game profile (defaults to the bundled Antistatic profile)")
 	flag.Parse()
 
 	if err := validateServerPorts(port, tlsPort, stunPort); err != nil {
@@ -190,7 +196,12 @@ func main() {
 		slog.Error("Invalid trusted proxy CIDRs", "error", err)
 		os.Exit(2)
 	}
-	config, err := applicationConfigFromEnv()
+	gameConfig, err := LoadConfig(configPath)
+	if err != nil {
+		slog.Error("Invalid game configuration", "error", err)
+		os.Exit(2)
+	}
+	config, err := applicationConfigFromEnv(gameConfig)
 	if err != nil {
 		slog.Error("Invalid application configuration", "error", err)
 		os.Exit(2)

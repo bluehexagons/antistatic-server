@@ -25,6 +25,35 @@ with admin credentials must use `-nohttp` or a trusted TLS-terminating proxy.
 
 Run with `antistatic-server -help` to view all command line options.
 
+### Game profile
+
+The server starts with the built-in Antistatic profile. Pass
+`-config path/to/game.json` to overlay a JSON game profile; the checked-in
+[`config/antistatic.json`](config/antistatic.json) file is a complete,
+prefilled starting point for forks:
+
+```sh
+antistatic-server -config config/antistatic.json -port 8080
+```
+
+The profile controls the service name shown by the health and admin pages,
+recurring queue events, report/metric route switches, and lobby and
+matchmaking lifetimes. Property names use `lower_snake_case`. Durations use Go
+duration strings such as `30s`, `2m`, and `1h`. An omitted property keeps the
+Antistatic default; an explicit empty `events` array removes every event.
+
+The file is bounded to 64 KiB and parsed and validated once at startup.
+Unknown properties, invalid weekdays/durations, duplicate event IDs, and
+values above compiled safety ceilings fail startup with a field-specific
+error. Request handlers consume the already parsed typed configuration and do
+not interpret the profile again.
+
+The hard ceilings currently allow at most 32 recurring events, a 10-minute
+lobby member lifetime, a 5-minute waiting-ticket lifetime, a 15-minute active
+match lifetime, and 24-hour report-retention and match-code lease lifetimes.
+The existing capacity, request-size, identifier, and storage bounds below are
+not configurable.
+
 By default, HTTPS support looks for `cert.key` and `cert.crt` in the working directory.
 Use `-cert path` and `-key path` to specify custom locations.
 Specifying a port using -tlsport will implicitly enable TLS.
@@ -49,6 +78,7 @@ Specifying a port using -tlsport will implicitly enable TLS.
 | `-trusted-proxy-cidrs` | "" | Comma-separated CIDR allowlist for trusted reverse proxies |
 | `-stun-host` | "" | Bind address for the built-in STUN responder (default: dual-stack any-address) |
 | `-stun-port` | 0 | UDP port for the built-in STUN responder (0 disables; conventional value is 3478) |
+| `-config` | built-in Antistatic profile | Optional JSON game profile to overlay on the defaults |
 
 ### Operational limits
 

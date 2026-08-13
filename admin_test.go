@@ -23,7 +23,7 @@ func adminRequest(method, target, username, password string, secure bool) *http.
 }
 
 func TestAdminRequiresTLSAndConstantTimeCredentials(t *testing.T) {
-	admin := securityHeaders(newAdminHandler(nil, "operator", "correct horse battery staple"))
+	admin := securityHeaders(newAdminHandler(nil, "operator", "correct horse battery staple", "Antistatic"))
 	recorder := httptest.NewRecorder()
 	admin.ServeHTTP(recorder, adminRequest(http.MethodGet, "/admin/", "operator", "correct horse battery staple", false))
 	if recorder.Code != http.StatusBadRequest {
@@ -68,7 +68,7 @@ func TestAdminEscapesStoredFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := newAdminHandler(store, "operator", "password")
+	admin := newAdminHandler(store, "operator", "password", "Antistatic")
 	recorder := httptest.NewRecorder()
 	admin.ServeHTTP(recorder, adminRequest(http.MethodGet, "/admin/feedback/"+id, "operator", "password", true))
 	if recorder.Code != http.StatusOK {
@@ -94,7 +94,7 @@ func TestAdminAcceptsForwardedHTTPSOnlyFromTrustedProxy(t *testing.T) {
 	if err := setTrustedProxyCIDRs("10.0.0.0/8"); err != nil {
 		t.Fatal(err)
 	}
-	admin := newAdminHandler(nil, "operator", "password")
+	admin := newAdminHandler(nil, "operator", "password", "Antistatic")
 	for _, test := range []struct {
 		remote string
 		want   int
@@ -125,7 +125,7 @@ func TestAdminCategoryReadsAndStorageErrors(t *testing.T) {
 	if err := os.Remove(store.collectionPath(feedbackCollection)); err != nil {
 		t.Fatal(err)
 	}
-	admin := newAdminHandler(store, "operator", "password")
+	admin := newAdminHandler(store, "operator", "password", "Antistatic")
 	for _, target := range []string{"/admin/crash", "/admin/crash/" + crashID} {
 		recorder := httptest.NewRecorder()
 		admin.ServeHTTP(recorder, adminRequest(http.MethodGet, target, "operator", "password", true))
@@ -159,7 +159,7 @@ func TestAdminBoundsRenderedRows(t *testing.T) {
 		}
 		lastID = id
 	}
-	admin := newAdminHandler(store, "operator", "password")
+	admin := newAdminHandler(store, "operator", "password", "Antistatic")
 	recorder := httptest.NewRecorder()
 	admin.ServeHTTP(recorder, adminRequest(http.MethodGet, "/admin/crash", "operator", "password", true))
 	if recorder.Code != http.StatusOK {

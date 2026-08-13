@@ -12,6 +12,7 @@ import (
 
 func newTestLobbyHandler() *lobbyHandler {
 	return &lobbyHandler{
+		Config:    DefaultConfig(),
 		Lobbies:   map[string]*Lobby{},
 		Tickets:   map[string]*MatchmakingTicket{},
 		Waiting:   map[string]map[string]*MatchmakingTicket{},

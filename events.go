@@ -6,39 +6,6 @@ import (
 	"time"
 )
 
-const recurringEventDuration = 60 * time.Minute
-
-type queueEventDefinition struct {
-	ID             string
-	Name           string
-	Region         string
-	Weekday        time.Weekday
-	StartHourUTC   int
-	StartMinuteUTC int
-}
-
-// These are deliberately public, recurring invitations rather than tracked
-// sessions. The UTC schedule is stable through daylight-saving changes; the
-// client converts StartsAtUTC/EndsAtUTC to the player's local time.
-var recurringQueueEventDefinitions = []queueEventDefinition{
-	{
-		ID:             "americas-community-queue",
-		Name:           "Americas community queue",
-		Region:         "Americas",
-		Weekday:        time.Saturday,
-		StartHourUTC:   21,
-		StartMinuteUTC: 0,
-	},
-	{
-		ID:             "eurasia-community-queue",
-		Name:           "Eurasia community queue",
-		Region:         "Eurasia",
-		Weekday:        time.Sunday,
-		StartHourUTC:   18,
-		StartMinuteUTC: 0,
-	},
-}
-
 type recurringQueueEvent struct {
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
@@ -56,21 +23,22 @@ type eventsResponse struct {
 	Events []recurringQueueEvent `json:"events"`
 }
 
-func eventStartOnDate(def queueEventDefinition, date time.Time) time.Time {
+func eventStartOnDate(def QueueEventConfig, date time.Time) time.Time {
 	return time.Date(date.Year(), date.Month(), date.Day(), def.StartHourUTC, def.StartMinuteUTC, 0, 0, time.UTC)
 }
 
-func nextRecurringEvent(def queueEventDefinition, now time.Time) recurringQueueEvent {
+func nextRecurringEvent(def QueueEventConfig, now time.Time) recurringQueueEvent {
 	now = now.UTC()
 	date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	duration := def.Duration.Duration()
 	var start time.Time
 	for offset := 0; offset <= 7; offset++ {
 		candidateDate := date.AddDate(0, 0, offset)
-		if candidateDate.Weekday() != def.Weekday {
+		if candidateDate.Weekday() != def.Weekday.Weekday() {
 			continue
 		}
 		candidate := eventStartOnDate(def, candidateDate)
-		end := candidate.Add(recurringEventDuration)
+		end := candidate.Add(duration)
 		if (now.Equal(candidate) || now.After(candidate)) && now.Before(end) {
 			start = candidate
 			break
@@ -87,32 +55,32 @@ func nextRecurringEvent(def queueEventDefinition, now time.Time) recurringQueueE
 		ID:              def.ID,
 		Name:            def.Name,
 		Region:          def.Region,
-		Weekday:         def.Weekday.String(),
+		Weekday:         def.Weekday.Weekday().String(),
 		StartHourUTC:    def.StartHourUTC,
 		StartMinuteUTC:  def.StartMinuteUTC,
-		DurationMinutes: int(recurringEventDuration / time.Minute),
-		Active:          !now.Before(start) && now.Before(start.Add(recurringEventDuration)),
+		DurationMinutes: int(duration / time.Minute),
+		Active:          !now.Before(start) && now.Before(start.Add(duration)),
 		StartsAtUTC:     start,
-		EndsAtUTC:       start.Add(recurringEventDuration),
+		EndsAtUTC:       start.Add(duration),
 	}
 }
 
-func recurringQueueEvents(now time.Time) []recurringQueueEvent {
-	events := make([]recurringQueueEvent, 0, len(recurringQueueEventDefinitions))
-	for _, def := range recurringQueueEventDefinitions {
+func recurringQueueEvents(definitions []QueueEventConfig, now time.Time) []recurringQueueEvent {
+	events := make([]recurringQueueEvent, 0, len(definitions))
+	for _, def := range definitions {
 		events = append(events, nextRecurringEvent(def, now))
 	}
 	return events
 }
 
-func eventsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Cache-Control", "public, max-age=300")
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(eventsResponse{Events: recurringQueueEvents(time.Now())}); err != nil {
-		return
+func eventsHandler(definitions []QueueEventConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(eventsResponse{Events: recurringQueueEvents(definitions, time.Now())})
 	}
 }

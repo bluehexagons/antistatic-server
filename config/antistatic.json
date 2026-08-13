@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "service": {
+    "name": "Antistatic"
+  },
+  "features": {
+    "events": true,
+    "crash_reports": true,
+    "feedback_reports": true,
+    "gameplay_metrics": true,
+    "performance_metrics": true,
+    "matchmaking_reports": true
+  },
+  "timeouts": {
+    "lobby_member": "30s",
+    "matchmaking_ticket": "30s",
+    "matchmaking_match": "2m0s",
+    "matchmaking_report_retention": "20m0s",
+    "matchmaking_tag_lease": "1h0m0s"
+  },
+  "events": [
+    {
+      "id": "americas-community-queue",
+      "name": "Americas community queue",
+      "region": "Americas",
+      "weekday": "Saturday",
+      "start_hour_utc": 21,
+      "start_minute_utc": 0,
+      "duration": "1h0m0s"
+    },
+    {
+      "id": "eurasia-community-queue",
+      "name": "Eurasia community queue",
+      "region": "Eurasia",
+      "weekday": "Sunday",
+      "start_hour_utc": 18,
+      "start_minute_utc": 0,
+      "duration": "1h0m0s"
+    }
+  ]
+}

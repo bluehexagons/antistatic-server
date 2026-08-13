@@ -11,10 +11,6 @@ import (
 	"time"
 )
 
-const matchmakingTicketTimeout = 30 * time.Second
-const matchmakingMatchTimeout = 2 * time.Minute
-const matchmakingReportRetention = 20 * time.Minute
-const matchmakingTagLeaseTimeout = time.Hour
 const maxMatchmakingTickets = 20000
 const maxMatchmakingMatches = 10000
 const maxMatchmakingQueues = 10000
@@ -320,12 +316,12 @@ func matchmakingMatchID(version, queue string, first, second MatchParticipant) s
 	return fmt.Sprintf("%s|%s|%s|%s", version, queue, first.TicketID, second.TicketID)
 }
 
-func (t *MatchmakingTicket) waiting(now time.Time) bool {
-	return t.MatchedID == "" && now.Before(t.CheckedIn.Add(matchmakingTicketTimeout))
+func (t *MatchmakingTicket) waiting(now time.Time, timeout time.Duration) bool {
+	return t.MatchedID == "" && now.Before(t.CheckedIn.Add(timeout))
 }
 
-func (m *Match) expired(now time.Time) bool {
-	return now.After(m.CreatedAt.Add(matchmakingMatchTimeout))
+func (m *Match) expired(now time.Time, timeout time.Duration) bool {
+	return now.After(m.CreatedAt.Add(timeout))
 }
 
 func (m *Match) participant(ticketID string) (self MatchParticipant, peer MatchParticipant, ok bool) {
@@ -397,14 +393,14 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 	for _, ticket := range h.Tickets {
 		if ticket.MatchedID != "" {
 			if _, ok := h.Matches[ticket.MatchedID]; !ok {
-				if now.After(ticket.CheckedIn.Add(matchmakingReportRetention)) {
+				if now.After(ticket.CheckedIn.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())) {
 					h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
 				}
 			}
 			continue
 		}
 
-		if !ticket.waiting(now) {
+		if !ticket.waiting(now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
 			h.recordQueueExpirationLocked(ticket, now)
 			h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
 		}
@@ -414,7 +410,7 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 }
 
 func (h *lobbyHandler) expireMatchLocked(matchID string, match *Match, now time.Time) bool {
-	if match == nil || !match.expired(now) {
+	if match == nil || !match.expired(now, h.Config.Timeouts.MatchmakingMatch.Duration()) {
 		return false
 	}
 	for _, player := range match.Players {
@@ -429,7 +425,7 @@ func (h *lobbyHandler) expireMatchLocked(matchID string, match *Match, now time.
 func (h *lobbyHandler) cleanupMatchmakingTagLeasesLocked(now time.Time) {
 	h.ensureMatchmakingIndexesLocked()
 	for key, lease := range h.TagLeases {
-		if now.After(lease.CheckedIn.Add(matchmakingTagLeaseTimeout)) {
+		if now.After(lease.CheckedIn.Add(h.Config.Timeouts.MatchmakingTagLease.Duration())) {
 			delete(h.TagLeases, key)
 		}
 	}
@@ -454,7 +450,7 @@ func (h *lobbyHandler) matchmakingQueueResponseLocked(ticket *MatchmakingTicket,
 	response := &matchmakingQueueResponse{}
 
 	for _, other := range h.Waiting[queueKey] {
-		if other.MatchedID != "" || !other.waiting(now) {
+		if other.MatchedID != "" || !other.waiting(now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
 			continue
 		}
 		response.PlayersWaiting++
@@ -492,7 +488,7 @@ func (h *lobbyHandler) matchmakingTicketResponseLocked(status string, ticket *Ma
 		Token:     ticket.Token,
 		TagToken:  ticket.TagToken,
 		Queue:     h.matchmakingQueueResponseLocked(ticket, now),
-		Events:    recurringQueueEvents(now),
+		Events:    h.recurringEvents(now),
 	}
 }
 
@@ -702,7 +698,7 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 		if other == ticket {
 			continue
 		}
-		if other.MatchedID != "" || !other.waiting(now) {
+		if other.MatchedID != "" || !other.waiting(now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
 			continue
 		}
 		if ticket.sharesEndpoint(other) {
@@ -836,7 +832,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 	if ticket.MatchedID != "" {
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
 			if h.expireMatchLocked(ticket.MatchedID, match, now) {
-				if now.After(ticket.CheckedIn.Add(matchmakingReportRetention)) {
+				if now.After(ticket.CheckedIn.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())) {
 					h.deleteTicketLocked(version, queue, ticketID)
 					return nil, http.StatusNotFound
 				}
@@ -846,14 +842,14 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 			resp.Match = match.responseFor(ticket.ID)
 			return resp, http.StatusOK
 		}
-		if now.After(ticket.CheckedIn.Add(matchmakingReportRetention)) {
+		if now.After(ticket.CheckedIn.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())) {
 			h.deleteTicketLocked(version, queue, ticketID)
 			return nil, http.StatusNotFound
 		}
 		return h.matchmakingTicketResponseLocked("canceled", ticket, now), http.StatusOK
 	}
 
-	if !ticket.waiting(now) {
+	if !ticket.waiting(now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
 		h.recordQueueExpirationLocked(ticket, now)
 		h.deleteTicketLocked(version, queue, ticketID)
 		return nil, http.StatusNotFound

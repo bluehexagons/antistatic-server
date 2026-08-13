@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +27,31 @@ func TestApplicationRouteAssembly(t *testing.T) {
 	application.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/1.2.3/reports/crash", nil))
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("wrong method status = %d, want 405", recorder.Code)
+	}
+}
+
+func TestApplicationFeatureSwitchesAndServiceIdentity(t *testing.T) {
+	config := DefaultConfig()
+	config.Service.Name = "Another Game"
+	config.Features.Events = false
+	config.Features.CrashReports = false
+	application, err := newApplicationHandler(applicationConfig{Game: config}, newTestLobbyHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(application.Close)
+
+	for _, path := range []string{"/events", "/1.2.3/reports/crash"} {
+		recorder := httptest.NewRecorder()
+		application.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("disabled route %s status = %d, want 404", path, recorder.Code)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	application.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health.html", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Another Game server health") {
+		t.Fatalf("configured health identity missing: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -86,11 +112,11 @@ func TestApplicationConfigFromEnvironment(t *testing.T) {
 	t.Setenv("ANTISTATIC_DATA_DIR", "")
 	t.Setenv("ANTISTATIC_ADMIN_USERNAME", "operator")
 	t.Setenv("ANTISTATIC_ADMIN_PASSWORD", "")
-	if _, err := applicationConfigFromEnv(); err == nil {
+	if _, err := applicationConfigFromEnv(DefaultConfig()); err == nil {
 		t.Fatal("one-sided environment admin configuration was accepted")
 	}
 	t.Setenv("ANTISTATIC_ADMIN_PASSWORD", "password")
-	config, err := applicationConfigFromEnv()
+	config, err := applicationConfigFromEnv(DefaultConfig())
 	if err != nil || config.AdminUsername != "operator" || config.AdminPassword != "password" || config.Store != nil {
 		t.Fatalf("environment config = %#v, %v", config, err)
 	}

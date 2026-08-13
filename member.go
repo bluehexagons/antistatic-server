@@ -40,8 +40,6 @@ type MemberView struct {
 	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
 }
 
-const memberTimeout = 30 * time.Second
-
 // maxLocalIPsPerMember caps how many LAN candidates a peer may publish; eight
 // covers the common multi-NIC / docker / WSL setups without giving a hostile
 // client room to flood the lobby with garbage.

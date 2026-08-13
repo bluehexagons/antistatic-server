@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"fmt"
 	"html/template"
 	"net/http"
 	"slices"
@@ -27,8 +28,8 @@ code { overflow-wrap: anywhere; }
 `
 
 var adminOverviewTemplate = template.Must(template.New("overview").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Antistatic reports</title><link rel="stylesheet" href="/admin/style.css"></head>
-<body><h1>Antistatic reports</h1>{{template "nav" .}}<p>Only privacy-bounded, rounded records are shown here.</p>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.ServiceName}} reports</title><link rel="stylesheet" href="/admin/style.css"></head>
+<body><h1>{{.ServiceName}} reports</h1>{{template "nav" .}}<p>Only privacy-bounded, rounded records are shown here.</p>
 {{if not .Available}}<p class="status">Report storage is unavailable. Configure ANTISTATIC_DATA_DIR to enable collection.</p>{{else}}
 <div class="cards"><div class="card"><strong>Crash reports</strong><br>{{.CrashCount}}</div><div class="card"><strong>Feedback</strong><br>{{.FeedbackCount}}</div><div class="card"><strong>Gameplay samples</strong><br>{{.GameplayCount}}</div><div class="card"><strong>Performance samples</strong><br>{{.PerformanceCount}}</div><div class="card"><strong>Netplay reports</strong><br>{{.NetplayCount}}</div></div>{{end}}</body></html>
 {{define "nav"}}<nav><a href="/admin/">Overview</a><a href="/admin/crash">Crashes</a><a href="/admin/feedback">Feedback</a><a href="/admin/gameplay">Gameplay</a><a href="/admin/performance">Performance</a><a href="/admin/netplay">Netplay</a></nav>{{end}}`))
@@ -48,6 +49,7 @@ var adminPerformanceTemplate = template.Must(template.New("performance").Parse(`
 var adminNetplayTemplate = template.Must(template.New("netplay").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Netplay reports</title><link rel="stylesheet" href="/admin/style.css"></head><body><h1>Netplay reports</h1>{{template "nav" .}}<p>{{.NetplayCount}} retained reports; showing up to 500 latest.</p>{{if .Available}}<table><tr><th>Time bucket</th><th>Report ID</th><th>Version</th><th>Event</th></tr>{{range .Netplay}}<tr><td>{{.ServerTime}}</td><td>{{.ID}}</td><td>{{.AppVersion}}</td><td>{{.Event}}</td></tr>{{end}}</table>{{else}}<p class="status">Report storage is unavailable.</p>{{end}}</body></html>{{define "nav"}}<nav><a href="/admin/">Overview</a><a href="/admin/crash">Crashes</a><a href="/admin/feedback">Feedback</a><a href="/admin/gameplay">Gameplay</a><a href="/admin/performance">Performance</a><a href="/admin/netplay">Netplay</a></nav>{{end}}`))
 
 type adminPageData struct {
+	ServiceName      string
 	Available        bool
 	CrashCount       int
 	FeedbackCount    int
@@ -63,15 +65,16 @@ type adminPageData struct {
 
 type adminServer struct {
 	store        *reportStore
+	serviceName  string
 	usernameHash [32]byte
 	passwordHash [32]byte
 	mux          *http.ServeMux
 }
 
-func newAdminHandler(store *reportStore, username, password string) http.Handler {
+func newAdminHandler(store *reportStore, username, password, serviceName string) http.Handler {
 	admin := &adminServer{
 		store: store, usernameHash: sha256.Sum256([]byte(username)), passwordHash: sha256.Sum256([]byte(password)),
-		mux: http.NewServeMux(),
+		serviceName: serviceName, mux: http.NewServeMux(),
 	}
 	admin.mux.HandleFunc("GET /admin/", admin.overview)
 	admin.mux.HandleFunc("GET /admin/style.css", admin.style)
@@ -101,7 +104,7 @@ func (admin *adminServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	passwordHash := sha256.Sum256([]byte(password))
 	credentialsMatch := subtle.ConstantTimeCompare(usernameHash[:], admin.usernameHash[:]) & subtle.ConstantTimeCompare(passwordHash[:], admin.passwordHash[:])
 	if !ok || credentialsMatch != 1 {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Antistatic admin", charset="UTF-8"`)
+		w.Header().Set("WWW-Authenticate", fmt.Sprintf("Basic realm=%q, charset=\"UTF-8\"", admin.serviceName+" admin"))
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -123,7 +126,7 @@ func latestRecords[T any](records []T) []T {
 }
 
 func (admin *adminServer) overviewData() (adminPageData, error) {
-	data := adminPageData{Available: admin.store != nil}
+	data := adminPageData{ServiceName: admin.serviceName, Available: admin.store != nil}
 	if admin.store == nil {
 		return data, nil
 	}
