@@ -203,6 +203,12 @@ type matchmakingRequest struct {
 	MatchCode      *matchmakingTagPair `json:"match_code,omitempty"`
 }
 
+type matchmakingCancelRequest struct {
+	clientIdentity
+	Queue     string              `json:"queue"`
+	MatchCode *matchmakingTagPair `json:"match_code,omitempty"`
+}
+
 type gameReportRequest struct {
 	clientIdentity
 	Queue     string              `json:"queue"`
@@ -275,17 +281,6 @@ func parseMatchCodeQueue(queue string) (matchmakingTagPair, bool) {
 		return matchmakingTagPair{}, false
 	}
 	return matchmakingTagPair{Self: first, Peer: second}, true
-}
-
-func normalizeMatchmakingQueue(queue string) (string, bool) {
-	if !strings.HasPrefix(strings.ToLower(queue), matchCodeQueuePrefix) {
-		return queue, true
-	}
-	tags, ok := parseMatchCodeQueue(queue)
-	if !ok {
-		return "", false
-	}
-	return canonicalMatchCodeQueue(tags.Self, tags.Peer), true
 }
 
 func normalizeMatchmakingTags(tags *matchmakingTagPair, queue string) (*matchmakingTagPair, string, bool) {
@@ -583,7 +578,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 			return nil, http.StatusForbidden
 		}
 		if existing.MatchedID == "" && existing.Metadata != metadata {
-			return h.matchmakingTicketResponseLocked("conflict", existing, now), http.StatusConflict
+			return nil, http.StatusConflict
 		}
 		if existing.MatchedID != "" {
 			if match, ok := h.Matches[existing.MatchedID]; ok {
@@ -595,7 +590,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 			}
 		}
 		if tags != nil && (existing.SelfTag != tags.Self || existing.PeerTag != tags.Peer) {
-			return h.matchmakingTicketResponseLocked("conflict", existing, now), http.StatusConflict
+			return nil, http.StatusConflict
 		}
 		if status := h.refreshMatchmakingTagLeaseLocked(existing, ip, now); status != http.StatusOK {
 			return nil, status
@@ -1070,9 +1065,19 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 
 	var request matchmakingRequest
-	if status := decodeStrictJSON(w, r, &request); status != 0 {
+	var destination any = &request
+	var cancel matchmakingCancelRequest
+	if r.Method == http.MethodDelete {
+		destination = &cancel
+	}
+	if status := decodeStrictJSON(w, r, destination); status != 0 {
 		writeIngestError(w, status)
 		return
+	}
+	if r.Method == http.MethodDelete {
+		request.clientIdentity = cancel.clientIdentity
+		request.Queue = cancel.Queue
+		request.MatchCode = cancel.MatchCode
 	}
 	if !validateClientIdentity(w, h.Config, request.clientIdentity) {
 		return
@@ -1146,7 +1151,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		if status == http.StatusConflict {
-			h.respondError(w, "Matchmaking tag is already in use", status)
+			h.respondError(w, "Matchmaking ticket conflicts with existing state", status)
 			return
 		}
 		if status == http.StatusTooManyRequests {

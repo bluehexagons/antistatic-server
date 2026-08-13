@@ -1,6 +1,6 @@
 {
   "name": "@bluehexagons/antistatic-server-protocol",
-  "version": "0.11.0-dev.4",
+  "version": "0.11.0-dev.5",
   "description": "TypeScript declarations for the antistatic-server HTTP protocol",
   "license": "MIT",
   "type": "module",

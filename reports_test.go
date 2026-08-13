@@ -214,7 +214,7 @@ func TestReportEndpointValidationAndUnavailableStorage(t *testing.T) {
 	}
 }
 
-func TestReportEndpointsRequireHTTPS(t *testing.T) {
+func TestReportEndpointUpgradeRequiredRepresentations(t *testing.T) {
 	store, err := newReportStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +226,22 @@ func TestReportEndpointsRequireHTTPS(t *testing.T) {
 	api.crash(recorder, request)
 	if recorder.Code != http.StatusUpgradeRequired {
 		t.Fatalf("plain HTTP report status = %d, want 426", recorder.Code)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+		t.Fatalf("plain HTTP report content type = %q, want text/plain", contentType)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, apiPrefix+"/reports/crash", strings.NewReader(`{"client_version":"1.2.3","compatibility_id":"another-game"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = "198.51.100.10:1234"
+	request.TLS = &tls.ConnectionState{}
+	recorder = httptest.NewRecorder()
+	api.crash(recorder, request)
+	if recorder.Code != http.StatusUpgradeRequired {
+		t.Fatalf("incompatible report status = %d, want 426", recorder.Code)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("incompatible report content type = %q, want application/json", contentType)
 	}
 }
 

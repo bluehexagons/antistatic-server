@@ -54,7 +54,7 @@ func validContractLobbyResponse(response lobbyResponse) bool {
 }
 
 func validContractMatchmakingResponse(response matchmakingResponse) bool {
-	if response.Ticket == "" || response.Token == "" || len(response.Endpoints) == 0 {
+	if response.Ticket == "" || response.Token == "" {
 		return false
 	}
 	for _, endpoint := range response.Endpoints {
@@ -63,7 +63,7 @@ func validContractMatchmakingResponse(response matchmakingResponse) bool {
 		}
 	}
 	if response.Status == "waiting" || response.Status == "canceled" {
-		return response.Match == nil
+		return response.Match == nil && (response.Status == "canceled" || len(response.Endpoints) > 0)
 	}
 	if response.Status != "matched" || response.Match == nil {
 		return false
@@ -127,6 +127,13 @@ func TestSharedProtocolRequestAndServiceFixtures(t *testing.T) {
 	if status := decodeProtocolFixtureStrict(t, "valid/lobby-request.json", &lobby); status != 0 || !validatePeerPort(lobby.Port) {
 		t.Fatalf("valid lobby request status/body = %d/%#v", status, lobby)
 	}
+	var leave lobbyLeaveBody
+	if status := decodeProtocolFixtureStrict(t, "valid/lobby-leave-request.json", &leave); status != 0 || !validatePeerPort(leave.Port) {
+		t.Fatalf("valid lobby leave status/body = %d/%#v", status, leave)
+	}
+	if status := decodeProtocolFixtureStrict(t, "invalid/lobby-leave-request-extra-fields.json", &leave); status != http.StatusBadRequest {
+		t.Fatalf("lobby leave with extra fields status = %d, want %d", status, http.StatusBadRequest)
+	}
 
 	var matchmaking matchmakingRequest
 	if status := decodeProtocolFixtureStrict(t, "valid/matchmaking-request.json", &matchmaking); status != 0 {
@@ -143,6 +150,13 @@ func TestSharedProtocolRequestAndServiceFixtures(t *testing.T) {
 	}
 	if _, _, ok := normalizeMatchmakingTags(matchmaking.MatchCode, matchmaking.Queue); ok {
 		t.Fatalf("bad match-code fixture accepted: %#v", matchmaking.MatchCode)
+	}
+	var cancel matchmakingCancelRequest
+	if status := decodeProtocolFixtureStrict(t, "valid/matchmaking-cancel-request.json", &cancel); status != 0 {
+		t.Fatalf("valid matchmaking cancel status = %d", status)
+	}
+	if status := decodeProtocolFixtureStrict(t, "invalid/matchmaking-cancel-request-extra-fields.json", &cancel); status != http.StatusBadRequest {
+		t.Fatalf("matchmaking cancel with extra fields status = %d, want %d", status, http.StatusBadRequest)
 	}
 
 	var events eventsResponse

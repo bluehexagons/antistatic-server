@@ -33,20 +33,19 @@ func serveLobbyRequestWithToken(h *lobbyHandler, method, target, remoteAddr stri
 	return serveLobbyRequestWithBody(h, method, target, remoteAddr, token, "")
 }
 
-// serveLobbyRequestWithBody accepts the compact historical test tuple
-// /<client_version>/lobby/<key>/<port> (or /lobby/<key>/<port> for the default
-// test version), then always sends the current /api/v1 request and JSON body.
+// serveLobbyRequestWithBody accepts the compact test tuple
+// /<client_version>/lobby/<key>/<port>, then always sends the current /api/v1
+// request and JSON body.
 // The tuple is fixture syntax only; TestLegacyProtocolRoutesAreRemoved exercises
 // the actual router boundary directly.
 func serveLobbyRequestWithBody(h *lobbyHandler, method, target, remoteAddr, token, body string) *httptest.ResponseRecorder {
 	rawTarget, _, _ := strings.Cut(target, "?")
 	parts := strings.Split(strings.Trim(rawTarget, "/"), "/")
-	lobbyIndex := 0
-	if parts[0] != "lobby" {
-		lobbyIndex = 1
+	if len(parts) != 4 || parts[1] != "lobby" {
+		panic("invalid lobby test target: " + target)
 	}
-	key := parts[lobbyIndex+1]
-	port, _ := strconv.Atoi(parts[lobbyIndex+2])
+	key := parts[2]
+	port, _ := strconv.Atoi(parts[3])
 	payload := map[string]any{
 		"client_version":   "0.9.5",
 		"compatibility_id": h.Config.Service.CompatibilityID,
@@ -599,6 +598,14 @@ func TestLobbyRejectsZeroPeerPortAndOversizedToken(t *testing.T) {
 	rec = serveLobbyRequestWithToken(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", strings.Repeat("a", maxBearerTokenLength+1))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized-token status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestLobbyLeaveRejectsCheckInOnlyFields(t *testing.T) {
+	h := newTestLobbyHandler()
+	rec := serveLobbyRequestWithBody(h, http.MethodDelete, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "", `{"local_ips":["192.168.1.10"]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("DELETE with check-in fields status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 

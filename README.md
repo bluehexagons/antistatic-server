@@ -223,9 +223,10 @@ adds no runtime validation or handler generation to the server.
 Report collection requires `Content-Type: application/json`, rejects unknown
 fields and trailing JSON, and uses the global 10 KiB request limit. In the
 current v1 schema, every body carries `client_version` for diagnostics and
-`compatibility_id` for exact admission. A mismatch returns `426` with the
+`compatibility_id` for exact admission. A mismatch returns `426` JSON with the
 server's expected identifier. All records store `client_version`.
-Report endpoints require HTTPS for non-loopback clients and allow at most 20
+Report endpoints require HTTPS for non-loopback clients; an insecure request
+returns `426` plaintext before its JSON body is decoded. They allow at most 20
 requests initially, refilling at 10 requests per minute per client IP and
 report path. They do not enable CORS; desktop clients send requests directly.
 Every `event_id` must be a fresh random 16-80 character identifier containing

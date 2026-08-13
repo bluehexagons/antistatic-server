@@ -505,15 +505,29 @@ type lobbyCheckInBody struct {
 	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
 }
 
+type lobbyLeaveBody struct {
+	clientIdentity
+	Port int `json:"port"`
+}
+
 func (h *lobbyHandler) serveLobby(w http.ResponseWriter, r *http.Request, ip, key string) {
 	if !validateLobbyKey(key) {
 		h.respondError(w, "Invalid lobby key", http.StatusBadRequest)
 		return
 	}
 	var request lobbyCheckInBody
-	if status := decodeStrictJSON(w, r, &request); status != 0 {
+	var destination any = &request
+	var leave lobbyLeaveBody
+	if r.Method == http.MethodDelete {
+		destination = &leave
+	}
+	if status := decodeStrictJSON(w, r, destination); status != 0 {
 		writeIngestError(w, status)
 		return
+	}
+	if r.Method == http.MethodDelete {
+		request.clientIdentity = leave.clientIdentity
+		request.Port = leave.Port
 	}
 	if !validateClientIdentity(w, h.Config, request.clientIdentity) {
 		return

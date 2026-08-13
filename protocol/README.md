@@ -39,3 +39,9 @@ The HTTP surface is fixed at `/api/v1`. Every request body includes
 `client_version` for diagnostics and `compatibility_id` for exact protocol
 admission. Ownership tokens use `Authorization: Bearer …`; no custom ownership
 or match-code headers are part of the API.
+
+Report and metric routes use status `426` for two early admission failures.
+An incompatible client receives the structured `APIErrorResponse` JSON body;
+an insecure non-loopback request receives a plaintext HTTPS-required error.
+Consumers should select the representation from `Content-Type` rather than
+assuming one body shape from the status alone.

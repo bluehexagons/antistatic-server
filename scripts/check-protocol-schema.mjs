@@ -98,6 +98,7 @@ function matchesType(type, value) {
 const fixtureCases = [
   ['LobbyCheckInRequest', 'valid/lobby-request.json', true],
   ['LobbyLeaveRequest', 'valid/lobby-leave-request.json', true],
+  ['LobbyLeaveRequest', 'invalid/lobby-leave-request-extra-fields.json', false],
   ['LobbyResponse', 'valid/lobby-response.json', true],
   ['LobbyResponse', 'invalid/lobby-response-missing-token.json', false],
   ['LobbyResponse', 'invalid/lobby-response-zero-port.json', false],
@@ -105,6 +106,7 @@ const fixtureCases = [
   ['MatchmakingRequest', 'invalid/matchmaking-request-extra-metadata.json', false],
   ['MatchmakingRequest', 'invalid/matchmaking-request-bad-match-code.json', false],
   ['MatchmakingCancelRequest', 'valid/matchmaking-cancel-request.json', true],
+  ['MatchmakingCancelRequest', 'invalid/matchmaking-cancel-request-extra-fields.json', false],
   ['MatchmakingOutcomeRequest', 'valid/matchmaking-outcome-request.json', true],
   ['MatchmakingResponse', 'valid/matchmaking-waiting-response.json', true],
   ['MatchmakingResponse', 'valid/matchmaking-matched-response.json', true],
@@ -123,4 +125,18 @@ const fixtureCases = [
 for (const [schemaName, fixture, expected] of fixtureCases) {
   const value = JSON.parse(readFileSync(new URL(`protocol/fixtures/${fixture}`, root), 'utf8'));
   assert.equal(valid(document.components.schemas[schemaName], value).ok, expected, `${fixture} validation`);
+}
+
+for (const path of [
+  '/api/v1/reports/crash',
+  '/api/v1/reports/feedback',
+  '/api/v1/metrics/gameplay',
+  '/api/v1/metrics/performance',
+]) {
+  const response = resolveRef(document.paths[path].post.responses['426'].$ref);
+  assert.deepEqual(
+    Object.keys(response.content).sort(),
+    ['application/json', 'text/plain'],
+    `${path} must document both upgrade-required representations`,
+  );
 }

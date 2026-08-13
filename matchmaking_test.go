@@ -66,11 +66,19 @@ func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, re
 		request.MatchCode = tags
 		body = request
 	case nil:
-		body = matchmakingRequest{
-			clientIdentity: identity,
-			Queue:          queue,
-			Port:           port,
-			MatchCode:      tags,
+		if method == http.MethodDelete {
+			body = matchmakingCancelRequest{
+				clientIdentity: identity,
+				Queue:          queue,
+				MatchCode:      tags,
+			}
+		} else {
+			body = matchmakingRequest{
+				clientIdentity: identity,
+				Queue:          queue,
+				Port:           port,
+				MatchCode:      tags,
+			}
 		}
 	}
 	var reader *bytes.Reader
@@ -512,6 +520,14 @@ func TestMatchmakingRefreshPreservesTicketAndUpdatesCheckIn(t *testing.T) {
 	if len(updatedEndpoints) != 1 || updatedEndpoints[0].Port != 45860 {
 		t.Fatalf("ticket endpoints = %#v, want one entry on port 45860", updatedEndpoints)
 	}
+
+	conflict := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Silicon"}}, token)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("metadata conflict status = %d, want %d", conflict.Code, http.StatusConflict)
+	}
+	if contentType := conflict.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+		t.Fatalf("metadata conflict content type = %q, want text/plain", contentType)
+	}
 }
 
 func TestMatchmakingRefreshUpdatesEndpoint(t *testing.T) {
@@ -773,6 +789,9 @@ func TestMatchmakingCodeTagLeaseRejectsDifferentToken(t *testing.T) {
 	if conflict.Code != http.StatusConflict {
 		t.Fatalf("duplicate self tag returned %d, want %d", conflict.Code, http.StatusConflict)
 	}
+	if contentType := conflict.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+		t.Fatalf("duplicate self tag content type = %q, want text/plain", contentType)
+	}
 
 	h.Mu.RLock()
 	defer h.Mu.RUnlock()
@@ -823,6 +842,9 @@ func TestMatchmakingCodeTagLeasePersistsAfterDeleteForSameToken(t *testing.T) {
 	)
 	if conflict.Code != http.StatusConflict {
 		t.Fatalf("second lease without tag token returned %d, want %d", conflict.Code, http.StatusConflict)
+	}
+	if contentType := conflict.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+		t.Fatalf("lease conflict content type = %q, want text/plain", contentType)
 	}
 
 	second := serveMatchmakingRequestWithTokenAndTags(
@@ -1453,5 +1475,20 @@ func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 	rec = serveMatchmakingRequestWithTokenAndTags(h, http.MethodPut, "/0.9.5/matchmaking/code/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, "", "ABCD", "EFGH", strings.Repeat("a", maxBearerTokenLength+1))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("oversized tag token status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestMatchmakingCancelRejectsPutOnlyFields(t *testing.T) {
+	h := newTestLobbyHandler()
+	rec := serveMatchmakingRequestWithToken(
+		h,
+		http.MethodDelete,
+		"/0.9.5/matchmaking/default/TicketA/45860",
+		"198.51.100.10:32000",
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}},
+		"owner-token",
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("DELETE with PUT fields status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }

@@ -34,7 +34,8 @@
           "403": { "$ref": "#/components/responses/PlainError" },
           "413": { "$ref": "#/components/responses/PlainError" },
           "415": { "$ref": "#/components/responses/PlainError" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "426": { "$ref": "#/components/responses/IncompatibleClient" },
+          "429": { "$ref": "#/components/responses/PlainError" }
         }
       }
     },
@@ -68,7 +69,8 @@
           "403": { "$ref": "#/components/responses/PlainError" },
           "413": { "$ref": "#/components/responses/PlainError" },
           "415": { "$ref": "#/components/responses/PlainError" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "426": { "$ref": "#/components/responses/IncompatibleClient" },
+          "429": { "$ref": "#/components/responses/PlainError" }
         }
       }
     },
@@ -85,7 +87,8 @@
           "404": { "$ref": "#/components/responses/PlainError" },
           "413": { "$ref": "#/components/responses/PlainError" },
           "415": { "$ref": "#/components/responses/PlainError" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "426": { "$ref": "#/components/responses/IncompatibleClient" },
+          "429": { "$ref": "#/components/responses/PlainError" }
         }
       }
     },
@@ -100,7 +103,7 @@
           "415": { "$ref": "#/components/responses/PlainError" },
           "429": { "$ref": "#/components/responses/PlainError" },
           "503": { "$ref": "#/components/responses/PlainError" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "426": { "$ref": "#/components/responses/ReportUpgradeRequired" }
         }
       }
     },
@@ -115,7 +118,7 @@
           "415": { "$ref": "#/components/responses/PlainError" },
           "429": { "$ref": "#/components/responses/PlainError" },
           "503": { "$ref": "#/components/responses/PlainError" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "426": { "$ref": "#/components/responses/ReportUpgradeRequired" }
         }
       }
     },
@@ -130,7 +133,7 @@
           "415": { "$ref": "#/components/responses/PlainError" },
           "429": { "$ref": "#/components/responses/PlainError" },
           "503": { "$ref": "#/components/responses/PlainError" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "426": { "$ref": "#/components/responses/ReportUpgradeRequired" }
         }
       }
     },
@@ -145,20 +148,26 @@
           "415": { "$ref": "#/components/responses/PlainError" },
           "429": { "$ref": "#/components/responses/PlainError" },
           "503": { "$ref": "#/components/responses/PlainError" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "426": { "$ref": "#/components/responses/ReportUpgradeRequired" }
         }
       }
     },
     "/events": {
       "get": {
         "operationId": "listEvents",
-        "responses": { "200": { "$ref": "#/components/responses/Events" } }
+        "responses": {
+          "200": { "$ref": "#/components/responses/Events" },
+          "429": { "$ref": "#/components/responses/PlainError" }
+        }
       }
     },
     "/health": {
       "get": {
         "operationId": "getHealth",
-        "responses": { "200": { "$ref": "#/components/responses/Health" } }
+        "responses": {
+          "200": { "$ref": "#/components/responses/Health" },
+          "429": { "$ref": "#/components/responses/PlainError" }
+        }
       }
     }
   },
@@ -203,6 +212,7 @@
       "Events": { "description": "Configured recurring events", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EventsResponse" } } } },
       "Health": { "description": "Service health and aggregate activity", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } } },
       "PlainError": { "description": "Request rejected", "content": { "text/plain": { "schema": { "type": "string" } } } },
+      "ReportUpgradeRequired": { "description": "HTTPS is required or the client compatibility identifier is not admitted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/APIErrorResponse" } }, "text/plain": { "schema": { "type": "string" } } } },
       "IncompatibleClient": { "description": "Client compatibility identifier is not admitted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/APIErrorResponse" } } } }
     },
     "schemas": {
