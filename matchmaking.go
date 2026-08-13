@@ -300,13 +300,14 @@ func normalizeMatchmakingTags(tags *matchmakingTagPair, queue string) (*matchmak
 	}
 	self := normalizeMatchmakingTag(tags.Self)
 	peer := normalizeMatchmakingTag(tags.Peer)
-	if !validateMatchmakingTag(self) || !validateMatchmakingTag(peer) || self == peer {
+	selfToken := strings.TrimSpace(tags.SelfToken)
+	if !validateMatchmakingTag(self) || !validateMatchmakingTag(peer) || self == peer || len(selfToken) > maxBearerTokenLength {
 		return nil, "", false
 	}
 	return &matchmakingTagPair{
 		Self:      self,
 		Peer:      peer,
-		SelfToken: strings.TrimSpace(tags.SelfToken),
+		SelfToken: selfToken,
 	}, canonicalMatchCodeQueue(self, peer), true
 }
 
@@ -1010,7 +1011,11 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, t
 		return
 	}
 
-	token := bearerToken(r)
+	token, validAuthorization := bearerToken(r)
+	if !validAuthorization {
+		h.respondError(w, "Invalid authorization", http.StatusBadRequest)
+		return
+	}
 	key := matchmakingTicketKey(report.CompatibilityID, queue, ticketID)
 	h.Mu.Lock()
 	h.cleanupMatchmakingLocked(time.Now())
@@ -1078,7 +1083,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if r.Method == http.MethodPut {
-		if !validatePort(request.Port) || !validateMatchmakingCharacter(request.Metadata.Character) {
+		if !validatePeerPort(request.Port) || !validateMatchmakingCharacter(request.Metadata.Character) {
 			h.respondError(w, "Invalid matchmaking request", http.StatusBadRequest)
 			return
 		}
@@ -1087,7 +1092,11 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 
 	now := time.Now()
-	token := bearerToken(r)
+	token, validAuthorization := bearerToken(r)
+	if !validAuthorization {
+		h.respondError(w, "Invalid authorization", http.StatusBadRequest)
+		return
+	}
 	version := request.CompatibilityID
 
 	h.Mu.Lock()

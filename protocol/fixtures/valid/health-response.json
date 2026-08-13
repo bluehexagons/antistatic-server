@@ -1,0 +1,20 @@
+{
+  "status": "ok",
+  "start_time": "2026-08-13T00:00:00Z",
+  "lobby_count": 0,
+  "ticket_count": 0,
+  "match_count": 0,
+  "tag_lease_count": 0,
+  "lobbies_created": 0,
+  "successful_matches": 0,
+  "queue_attempt_count": 0,
+  "match_connection_success_count": 0,
+  "match_connection_failure_count": 0,
+  "queue_cancellation_count": 0,
+  "queue_expiration_count": 0,
+  "http_error_count": 0,
+  "game_error_count": 0,
+  "activity": { "window_days": 14, "timezone": "UTC", "hours": [] },
+  "events": [],
+  "version": "0.11.0-dev.4"
+}

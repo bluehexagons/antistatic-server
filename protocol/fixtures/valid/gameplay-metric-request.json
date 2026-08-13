@@ -1,0 +1,15 @@
+{
+  "client_version": "0.11.0-dev.4",
+  "compatibility_id": "antistatic-v1",
+  "event_id": "random-event-id-4003",
+  "mode": "versus",
+  "stage": "ruins",
+  "character": "carbon",
+  "opponent_character": "silicon",
+  "online": true,
+  "completed": true,
+  "duration_frames": 3600,
+  "local_players": 1,
+  "cpu_players": 0,
+  "result": "win"
+}

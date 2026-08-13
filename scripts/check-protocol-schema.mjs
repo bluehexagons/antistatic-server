@@ -96,10 +96,29 @@ function matchesType(type, value) {
 }
 
 const fixtureCases = [
+  ['LobbyCheckInRequest', 'valid/lobby-request.json', true],
+  ['LobbyLeaveRequest', 'valid/lobby-leave-request.json', true],
   ['LobbyResponse', 'valid/lobby-response.json', true],
   ['LobbyResponse', 'invalid/lobby-response-missing-token.json', false],
+  ['LobbyResponse', 'invalid/lobby-response-zero-port.json', false],
+  ['MatchmakingRequest', 'valid/matchmaking-request.json', true],
+  ['MatchmakingRequest', 'invalid/matchmaking-request-extra-metadata.json', false],
+  ['MatchmakingRequest', 'invalid/matchmaking-request-bad-match-code.json', false],
+  ['MatchmakingCancelRequest', 'valid/matchmaking-cancel-request.json', true],
+  ['MatchmakingOutcomeRequest', 'valid/matchmaking-outcome-request.json', true],
+  ['MatchmakingResponse', 'valid/matchmaking-waiting-response.json', true],
   ['MatchmakingResponse', 'valid/matchmaking-matched-response.json', true],
+  ['MatchmakingResponse', 'valid/matchmaking-canceled-response.json', true],
   ['MatchmakingResponse', 'invalid/matchmaking-matched-response-bad-port.json', false],
+  ['EventsResponse', 'valid/events-response.json', true],
+  ['EventsResponse', 'invalid/events-response-zero-duration.json', false],
+  ['HealthResponse', 'valid/health-response.json', true],
+  ['CrashReportRequest', 'valid/crash-report-request.json', true],
+  ['FeedbackRequest', 'valid/feedback-request.json', true],
+  ['GameplayMetricRequest', 'valid/gameplay-metric-request.json', true],
+  ['PerformanceMetricRequest', 'valid/performance-metric-request.json', true],
+  ['APIErrorResponse', 'valid/api-error-response.json', true],
+  ['ReportResponse', 'valid/report-response.json', true],
 ];
 for (const [schemaName, fixture, expected] of fixtureCases) {
   const value = JSON.parse(readFileSync(new URL(`protocol/fixtures/${fixture}`, root), 'utf8'));

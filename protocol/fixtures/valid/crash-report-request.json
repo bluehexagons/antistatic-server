@@ -1,0 +1,9 @@
+{
+  "client_version": "0.11.0-dev.4",
+  "compatibility_id": "antistatic-v1",
+  "event_id": "random-event-id-4001",
+  "platform": "linux",
+  "arch": "x86_64",
+  "reason_code": "uncaught_exception",
+  "symbols": ["engine::run()"]
+}

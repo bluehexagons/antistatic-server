@@ -19,10 +19,9 @@ type Endpoint struct {
 
 type Member struct {
 	// Endpoints lists every (IP, Port) the member has checked in from. The
-	// first entry is the original / primary endpoint (kept stable so that
-	// older clients reading the flat top-level IP/Port fields keep seeing
-	// the same value across refresh cycles). Additional entries are added
-	// when the member checks in over a second address family.
+	// first entry is the original / primary endpoint and remains stable across
+	// refresh cycles. Additional entries are added when the member checks in
+	// over a second address family.
 	Endpoints      []Endpoint
 	LocalIPs       []string
 	LocalEndpoints []Endpoint
@@ -166,7 +165,7 @@ func sanitizeLocalEndpoints(in []Endpoint, localIPs []string) []Endpoint {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]Endpoint, 0, len(in))
 	for _, raw := range in {
-		if !validatePort(raw.Port) || raw.Port == 0 || len(raw.IP) == 0 || len(raw.IP) > maxLocalIPLength {
+		if !validatePeerPort(raw.Port) || len(raw.IP) == 0 || len(raw.IP) > maxLocalIPLength {
 			continue
 		}
 		parsed := net.ParseIP(raw.IP)

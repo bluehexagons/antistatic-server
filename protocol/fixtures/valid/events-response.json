@@ -1,0 +1,14 @@
+{
+  "events": [{
+    "id": "americas-community-queue",
+    "name": "Americas community queue",
+    "region": "Americas",
+    "weekday": "Saturday",
+    "start_hour_utc": 21,
+    "start_minute_utc": 0,
+    "duration_minutes": 60,
+    "active": false,
+    "starts_at_utc": "2026-08-15T21:00:00Z",
+    "ends_at_utc": "2026-08-15T22:00:00Z"
+  }]
+}

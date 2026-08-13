@@ -2,7 +2,7 @@
 
 export type ClientIdentity = {
   client_version: string;
-  compatibility_id: string;
+  compatibility_id: AntistaticCompatibilityID;
 };
 
 export type APIErrorResponse = {
@@ -59,11 +59,14 @@ export type EventsResponse = {
   events: CommunityQueueEvent[];
 };
 
+export type CompatibilityID = string;
+
+export type AntistaticCompatibilityID = "antistatic-v1";
+
 export type MatchmakingMetadata = Record<string, string>;
 
 export type AntistaticMatchmakingMetadata = {
   character: string;
-  [key: string]: string;
 };
 
 export type MatchCodeClaim = {

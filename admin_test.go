@@ -204,3 +204,46 @@ func TestAdminBoundsRenderedRows(t *testing.T) {
 		t.Fatalf("overview did not report full streaming count: %d %s", overview.Code, overview.Body.String())
 	}
 }
+
+func TestAdminRendersGameplayPerformanceAndNetplayRecords(t *testing.T) {
+	store, err := newReportStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	online, completed := true, true
+	if _, err := store.appendGameplay(gameplayRequest{
+		EventID: "random-admin-gameplay-0001", Mode: "versus", Stage: "ruins",
+		Character: "carbon", OpponentCharacter: "silicon", Online: &online,
+		Completed: &completed, DurationFrames: 3600, LocalPlayers: 1, Result: "win",
+	}, "1.2.3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.appendPerformance(performanceRequest{
+		EventID: "random-admin-performance-01", Platform: "linux", Arch: "x86_64",
+		RendererFamily: "vulkan", GPUVendor: "amd", MemoryGiBBucket: "16-31",
+		CPUCoresBucket: "5-8", ResolutionBucket: "1440p", SampleFrames: 600,
+		FrameMsAvg: 8.2, FrameMsP95: 11.4,
+	}, "1.2.3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.appendNetplay(netplayRecord{ID: "nr-0123456789abcdef", AppVersion: "1.2.3", Event: "match_connected"}); err != nil {
+		t.Fatal(err)
+	}
+
+	admin := newAdminHandler(store, "operator", "password", "Antistatic", DefaultConfig().Features)
+	for _, test := range []struct {
+		target string
+		want   string
+	}{
+		{target: "/admin/gameplay", want: "carbon / silicon"},
+		{target: "/admin/performance", want: "vulkan / amd"},
+		{target: "/admin/netplay", want: "match_connected"},
+	} {
+		recorder := httptest.NewRecorder()
+		admin.ServeHTTP(recorder, adminRequest(http.MethodGet, test.target, "operator", "password", true))
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), test.want) {
+			t.Fatalf("%s response = %d, missing %q: %s", test.target, recorder.Code, test.want, recorder.Body.String())
+		}
+	}
+}

@@ -1,0 +1,14 @@
+{
+  "events": [{
+    "id": "broken-event",
+    "name": "Broken event",
+    "region": "Global",
+    "weekday": "Sunday",
+    "start_hour_utc": 12,
+    "start_minute_utc": 0,
+    "duration_minutes": 0,
+    "active": false,
+    "starts_at_utc": "2026-08-16T12:00:00Z",
+    "ends_at_utc": "2026-08-16T12:00:00Z"
+  }]
+}

@@ -11,10 +11,17 @@
       "parameters": [{ "$ref": "#/components/parameters/LobbyKey" }],
       "put": {
         "operationId": "checkInLobby",
+        "security": [{}, { "bearerAuth": [] }],
         "requestBody": { "$ref": "#/components/requestBodies/LobbyCheckIn" },
         "responses": {
           "200": { "$ref": "#/components/responses/Lobby" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "403": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" },
+          "429": { "$ref": "#/components/responses/PlainError" },
+          "503": { "$ref": "#/components/responses/PlainError" }
         }
       },
       "delete": {
@@ -23,6 +30,10 @@
         "requestBody": { "$ref": "#/components/requestBodies/LobbyLeave" },
         "responses": {
           "204": { "description": "Lobby membership removed" },
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "403": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
           "426": { "$ref": "#/components/responses/IncompatibleClient" }
         }
       }
@@ -36,7 +47,14 @@
         "requestBody": { "$ref": "#/components/requestBodies/Matchmaking" },
         "responses": {
           "200": { "$ref": "#/components/responses/Matchmaking" },
-          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "403": { "$ref": "#/components/responses/PlainError" },
+          "409": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" },
+          "429": { "$ref": "#/components/responses/PlainError" },
+          "503": { "$ref": "#/components/responses/PlainError" }
         }
       },
       "delete": {
@@ -46,6 +64,10 @@
         "responses": {
           "200": { "$ref": "#/components/responses/Matchmaking" },
           "204": { "description": "Ticket was already absent" },
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "403": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
           "426": { "$ref": "#/components/responses/IncompatibleClient" }
         }
       }
@@ -58,6 +80,11 @@
         "requestBody": { "$ref": "#/components/requestBodies/MatchmakingOutcome" },
         "responses": {
           "200": { "$ref": "#/components/responses/Report" },
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "403": { "$ref": "#/components/responses/PlainError" },
+          "404": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
           "426": { "$ref": "#/components/responses/IncompatibleClient" }
         }
       }
@@ -68,6 +95,11 @@
         "requestBody": { "$ref": "#/components/requestBodies/CrashReport" },
         "responses": {
           "201": { "$ref": "#/components/responses/Report" },
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
+          "429": { "$ref": "#/components/responses/PlainError" },
+          "503": { "$ref": "#/components/responses/PlainError" },
           "426": { "$ref": "#/components/responses/IncompatibleClient" }
         }
       }
@@ -78,6 +110,11 @@
         "requestBody": { "$ref": "#/components/requestBodies/Feedback" },
         "responses": {
           "201": { "$ref": "#/components/responses/Report" },
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
+          "429": { "$ref": "#/components/responses/PlainError" },
+          "503": { "$ref": "#/components/responses/PlainError" },
           "426": { "$ref": "#/components/responses/IncompatibleClient" }
         }
       }
@@ -88,6 +125,11 @@
         "requestBody": { "$ref": "#/components/requestBodies/GameplayMetric" },
         "responses": {
           "204": { "description": "Metric accepted" },
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
+          "429": { "$ref": "#/components/responses/PlainError" },
+          "503": { "$ref": "#/components/responses/PlainError" },
           "426": { "$ref": "#/components/responses/IncompatibleClient" }
         }
       }
@@ -98,6 +140,11 @@
         "requestBody": { "$ref": "#/components/requestBodies/PerformanceMetric" },
         "responses": {
           "204": { "description": "Metric accepted" },
+          "400": { "$ref": "#/components/responses/PlainError" },
+          "413": { "$ref": "#/components/responses/PlainError" },
+          "415": { "$ref": "#/components/responses/PlainError" },
+          "429": { "$ref": "#/components/responses/PlainError" },
+          "503": { "$ref": "#/components/responses/PlainError" },
           "426": { "$ref": "#/components/responses/IncompatibleClient" }
         }
       }
@@ -124,13 +171,13 @@
         "name": "key",
         "in": "path",
         "required": true,
-        "schema": { "type": "string", "minLength": 1, "maxLength": 64 }
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" }
       },
       "MatchmakingTicket": {
         "name": "ticket",
         "in": "path",
         "required": true,
-        "schema": { "type": "string", "minLength": 1, "maxLength": 64 }
+        "schema": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" }
       },
       "LongPollWait": {
         "name": "wait",
@@ -155,6 +202,7 @@
       "Report": { "description": "Stable anonymous report identifier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReportResponse" } } } },
       "Events": { "description": "Configured recurring events", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EventsResponse" } } } },
       "Health": { "description": "Service health and aggregate activity", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } } },
+      "PlainError": { "description": "Request rejected", "content": { "text/plain": { "schema": { "type": "string" } } } },
       "IncompatibleClient": { "description": "Client compatibility identifier is not admitted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/APIErrorResponse" } } } }
     },
     "schemas": {
@@ -163,7 +211,7 @@
         "required": ["client_version", "compatibility_id"],
         "properties": {
           "client_version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$" },
-          "compatibility_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" }
+          "compatibility_id": { "$ref": "#/components/schemas/AntistaticCompatibilityID" }
         }
       },
       "APIErrorResponse": {
@@ -180,7 +228,7 @@
         "additionalProperties": false,
         "required": ["ip", "port"],
         "properties": {
-          "ip": { "type": "string", "maxLength": 64 },
+          "ip": { "type": "string", "minLength": 1, "maxLength": 64 },
           "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
         }
       },
@@ -252,15 +300,17 @@
         }
       },
       "EventsResponse": { "type": "object", "additionalProperties": false, "required": ["events"], "properties": { "events": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/CommunityQueueEvent" } } } },
+      "CompatibilityID": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" },
+      "AntistaticCompatibilityID": { "const": "antistatic-v1" },
       "MatchmakingMetadata": { "type": "object", "additionalProperties": { "type": "string" } },
-      "AntistaticMatchmakingMetadata": { "type": "object", "additionalProperties": { "type": "string" }, "required": ["character"], "properties": { "character": { "type": "string", "minLength": 1, "maxLength": 64 } } },
+      "AntistaticMatchmakingMetadata": { "type": "object", "additionalProperties": false, "required": ["character"], "properties": { "character": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$" } } },
       "MatchCodeClaim": {
         "type": "object",
         "additionalProperties": false,
         "required": ["self_tag", "peer_tag"],
         "properties": {
-          "self_tag": { "type": "string", "minLength": 1, "maxLength": 16 },
-          "peer_tag": { "type": "string", "minLength": 1, "maxLength": 16 },
+          "self_tag": { "type": "string", "pattern": "^[A-Z0-9]{4,8}$" },
+          "peer_tag": { "type": "string", "pattern": "^[A-Z0-9]{4,8}$" },
           "self_tag_token": { "type": "string", "maxLength": 512 }
         }
       },
@@ -272,7 +322,7 @@
             "type": "object",
             "required": ["queue", "port", "metadata"],
             "properties": {
-              "queue": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "queue": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" },
               "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
               "metadata": { "$ref": "#/components/schemas/AntistaticMatchmakingMetadata" },
               "local_ips": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 64 } },
@@ -286,7 +336,7 @@
         "unevaluatedProperties": false,
         "allOf": [
           { "$ref": "#/components/schemas/ClientIdentity" },
-          { "type": "object", "required": ["queue"], "properties": { "queue": { "type": "string", "minLength": 1, "maxLength": 64 }, "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" } } }
+          { "type": "object", "required": ["queue"], "properties": { "queue": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" }, "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" } } }
         ]
       },
       "MatchmakingPeer": {
@@ -372,7 +422,7 @@
         "unevaluatedProperties": false,
         "allOf": [
           { "$ref": "#/components/schemas/ClientIdentity" },
-          { "type": "object", "required": ["queue", "event"], "properties": { "queue": { "type": "string", "minLength": 1, "maxLength": 64 }, "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" }, "event": { "$ref": "#/components/schemas/MatchmakingOutcome" } } }
+          { "type": "object", "required": ["queue", "event"], "properties": { "queue": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" }, "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" }, "event": { "$ref": "#/components/schemas/MatchmakingOutcome" } } }
         ]
       },
       "ReportResponse": { "type": "object", "additionalProperties": false, "required": ["report_id"], "properties": { "report_id": { "type": "string", "pattern": "^(cr|fb|nr)-[a-f0-9]{16}$" } } },
@@ -381,7 +431,7 @@
         "unevaluatedProperties": false,
         "allOf": [
           { "$ref": "#/components/schemas/ClientIdentity" },
-          { "type": "object", "required": ["event_id", "platform", "arch", "reason_code", "symbols"], "properties": { "event_id": { "$ref": "#/components/schemas/EventID" }, "platform": { "$ref": "#/components/schemas/Platform" }, "arch": { "type": "string", "minLength": 1, "maxLength": 32 }, "reason_code": { "type": "string", "minLength": 1, "maxLength": 64 }, "symbols": { "type": "array", "maxItems": 48, "items": { "type": "string", "maxLength": 120 } } } }
+          { "type": "object", "required": ["event_id", "platform", "arch", "reason_code", "symbols"], "properties": { "event_id": { "$ref": "#/components/schemas/EventID" }, "platform": { "$ref": "#/components/schemas/Platform" }, "arch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$" }, "reason_code": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" }, "symbols": { "type": "array", "maxItems": 48, "items": { "type": "string", "pattern": "^[A-Za-z0-9_:.<>~()+*,& -]{1,120}$" } } } }
         ]
       },
       "EventID": { "type": "string", "minLength": 16, "maxLength": 80, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{15,79}$" },
@@ -411,7 +461,7 @@
         "unevaluatedProperties": false,
         "allOf": [
           { "$ref": "#/components/schemas/ClientIdentity" },
-          { "type": "object", "required": ["event_id", "platform", "arch", "renderer_family", "gpu_vendor", "memory_gib_bucket", "cpu_cores_bucket", "resolution_bucket", "sample_frames", "frame_ms_avg", "frame_ms_p95"], "properties": { "event_id": { "$ref": "#/components/schemas/EventID" }, "platform": { "$ref": "#/components/schemas/Platform" }, "arch": { "type": "string", "minLength": 1, "maxLength": 32 }, "renderer_family": { "$ref": "#/components/schemas/RendererFamily" }, "gpu_vendor": { "$ref": "#/components/schemas/GPUVendor" }, "memory_gib_bucket": { "$ref": "#/components/schemas/MemoryGiBBucket" }, "cpu_cores_bucket": { "$ref": "#/components/schemas/CPUCoresBucket" }, "resolution_bucket": { "$ref": "#/components/schemas/ResolutionBucket" }, "sample_frames": { "type": "integer", "minimum": 1, "maximum": 1000000 }, "frame_ms_avg": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 }, "frame_ms_p95": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 } } }
+          { "type": "object", "required": ["event_id", "platform", "arch", "renderer_family", "gpu_vendor", "memory_gib_bucket", "cpu_cores_bucket", "resolution_bucket", "sample_frames", "frame_ms_avg", "frame_ms_p95"], "properties": { "event_id": { "$ref": "#/components/schemas/EventID" }, "platform": { "$ref": "#/components/schemas/Platform" }, "arch": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$" }, "renderer_family": { "$ref": "#/components/schemas/RendererFamily" }, "gpu_vendor": { "$ref": "#/components/schemas/GPUVendor" }, "memory_gib_bucket": { "$ref": "#/components/schemas/MemoryGiBBucket" }, "cpu_cores_bucket": { "$ref": "#/components/schemas/CPUCoresBucket" }, "resolution_bucket": { "$ref": "#/components/schemas/ResolutionBucket" }, "sample_frames": { "type": "integer", "minimum": 1, "maximum": 1000000 }, "frame_ms_avg": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 }, "frame_ms_p95": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 } } }
         ]
       },
       "RecentHTTPError": { "type": "object", "additionalProperties": false, "required": ["time", "code", "status"], "properties": { "time": { "type": "string", "format": "date-time" }, "code": { "type": "string" }, "status": { "type": "integer" } } },

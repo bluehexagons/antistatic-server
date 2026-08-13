@@ -33,6 +33,11 @@ func serveLobbyRequestWithToken(h *lobbyHandler, method, target, remoteAddr stri
 	return serveLobbyRequestWithBody(h, method, target, remoteAddr, token, "")
 }
 
+// serveLobbyRequestWithBody accepts the compact historical test tuple
+// /<client_version>/lobby/<key>/<port> (or /lobby/<key>/<port> for the default
+// test version), then always sends the current /api/v1 request and JSON body.
+// The tuple is fixture syntax only; TestLegacyProtocolRoutesAreRemoved exercises
+// the actual router boundary directly.
 func serveLobbyRequestWithBody(h *lobbyHandler, method, target, remoteAddr, token, body string) *httptest.ResponseRecorder {
 	rawTarget, _, _ := strings.Cut(target, "?")
 	parts := strings.Split(strings.Trim(rawTarget, "/"), "/")
@@ -181,9 +186,9 @@ func TestVersionedLobbyCheckInIgnoresQueryString(t *testing.T) {
 	// to guard against is now structurally impossible.
 }
 
-func TestFixedLobbyRoute(t *testing.T) {
+func TestLobbyCheckIn(t *testing.T) {
 	h := newTestLobbyHandler()
-	rec := serveLobbyRequest(h, http.MethodPut, "/lobby/ABC123/45860", "198.51.100.20:32000")
+	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.20:32000")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT returned status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -204,15 +209,15 @@ func TestLobbyCodeUsesCompatibilityIdentityInsteadOfClientVersion(t *testing.T) 
 
 	first := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
 	second := serveLobbyRequest(h, http.MethodPut, "/0.9.6/lobby/ABC123/45861", "198.51.100.20:32001")
-	legacy := serveLobbyRequest(h, http.MethodPut, "/lobby/ABC123/45862", "198.51.100.30:32002")
+	third := serveLobbyRequest(h, http.MethodPut, "/0.9.7/lobby/ABC123/45862", "198.51.100.30:32002")
 
-	for label, rec := range map[string]*httptest.ResponseRecorder{"first": first, "second": second, "third": legacy} {
+	for label, rec := range map[string]*httptest.ResponseRecorder{"first": first, "second": second, "third": third} {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s PUT returned status %d: %s", label, rec.Code, rec.Body.String())
 		}
 	}
 
-	response := decodeLobbyResponse(t, legacy)
+	response := decodeLobbyResponse(t, third)
 	if got := len(h.Lobbies); got != 1 || len(response.Lobby.Members) != 3 {
 		t.Fatalf("stored lobbies/members = %d/%d, want one compatible lobby with three members", got, len(response.Lobby.Members))
 	}
@@ -570,7 +575,7 @@ func TestLobbyLocalIPsRevealedOnlyToSamePublicIP(t *testing.T) {
 }
 
 // TestLobbyRejectsMalformedCheckInBody guards against a malformed JSON body
-// being silently accepted. Empty body remains valid (older clients send none).
+// being silently accepted.
 func TestLobbyRejectsMalformedCheckInBody(t *testing.T) {
 	h := newTestLobbyHandler()
 	rec := serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "", `{"local_ips":`)
@@ -581,6 +586,19 @@ func TestLobbyRejectsMalformedCheckInBody(t *testing.T) {
 	rec = serveLobbyRequestWithBody(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "", `{} {}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("trailing JSON status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestLobbyRejectsZeroPeerPortAndOversizedToken(t *testing.T) {
+	h := newTestLobbyHandler()
+	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/0", "198.51.100.10:32000")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("zero-port status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = serveLobbyRequestWithToken(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", strings.Repeat("a", maxBearerTokenLength+1))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized-token status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 

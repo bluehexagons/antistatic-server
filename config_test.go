@@ -58,6 +58,8 @@ func TestLoadConfigReportsSpecificInvalidField(t *testing.T) {
 		{contents: `{"unknown": true}`, want: "unknown field"},
 		{contents: `{"timeouts":{"matchmaking_ticket":"6m"}}`, want: "timeouts.matchmaking_ticket"},
 		{contents: `{"events":[{"id":"weekly","name":"Weekly","region":"Global","weekday":"Funday","start_hour_utc":1,"start_minute_utc":0,"duration":"1h"}]}`, want: "invalid weekday"},
+		{contents: `{"events":[{"id":"weekly","name":"Weekly","region":"Global","weekday":"Sunday","start_hour_utc":1,"start_minute_utc":0,"duration":"30s"}]}`, want: "whole number of minutes"},
+		{contents: `{"events":[{"id":"weekly","name":"Weekly","region":"Global","weekday":"Sunday","start_hour_utc":1,"start_minute_utc":0,"duration":"90s"}]}`, want: "whole number of minutes"},
 		{contents: `{"service":{"name":"  "}}`, want: "service.name"},
 	}
 	for _, test := range tests {

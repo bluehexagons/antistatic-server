@@ -518,13 +518,17 @@ func (h *lobbyHandler) serveLobby(w http.ResponseWriter, r *http.Request, ip, ke
 	if !validateClientIdentity(w, h.Config, request.clientIdentity) {
 		return
 	}
-	if !validatePort(request.Port) {
+	if !validatePeerPort(request.Port) {
 		h.respondError(w, "Invalid port", http.StatusBadRequest)
 		return
 	}
 	request.LocalIPs = sanitizeLocalIPs(request.LocalIPs)
 	request.LocalEndpoints = sanitizeLocalEndpoints(request.LocalEndpoints, request.LocalIPs)
-	token := bearerToken(r)
+	token, validAuthorization := bearerToken(r)
+	if !validAuthorization {
+		h.respondError(w, "Invalid authorization", http.StatusBadRequest)
+		return
+	}
 	storageKey := lobbyStorageKey(request.CompatibilityID, key)
 
 	h.Mu.Lock()

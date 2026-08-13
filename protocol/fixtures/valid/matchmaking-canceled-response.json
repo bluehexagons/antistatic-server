@@ -1,0 +1,6 @@
+{
+  "status": "canceled",
+  "ticket": "TicketA",
+  "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
+  "token": "owner-token"
+}

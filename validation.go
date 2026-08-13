@@ -32,3 +32,9 @@ func validateVersion(version string) bool {
 func validatePort(port int) bool {
 	return port >= 0 && port <= 65535
 }
+
+// validatePeerPort excludes the deployment-only ephemeral listener port. A
+// coordination response must always advertise a usable remote endpoint.
+func validatePeerPort(port int) bool {
+	return port >= 1 && port <= 65535
+}

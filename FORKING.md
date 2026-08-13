@@ -54,6 +54,12 @@ request or response:
    same fixtures.
 5. Bump the protocol package version in `package.json`.
 
+The immutable tag archives the repository root, so npm also sees root files
+selected by its package rules, including `README.md`. Treat any package-visible
+root change as a package change: make it before the version bump and tag, then
+verify `npm pack --dry-run` from the exact tagged archive. Never add such a
+change after publishing a protocol tag without issuing a new version.
+
 The generated TypeScript package is type-only. Client code should use `import
 type` and should still validate untrusted responses once at the network
 boundary. Prefer exact concrete aliases for the shipped game; generic metadata

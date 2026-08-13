@@ -216,8 +216,9 @@ func validateConfig(config Config) error {
 		if event.StartMinuteUTC < 0 || event.StartMinuteUTC > 59 {
 			return fmt.Errorf("%s.start_minute_utc must be between 0 and 59", field)
 		}
-		if event.Duration.Duration() <= 0 || event.Duration.Duration() > maxRecurringEventDuration {
-			return fmt.Errorf("%s.duration must be greater than zero and no more than %s", field, maxRecurringEventDuration)
+		duration := event.Duration.Duration()
+		if duration < time.Minute || duration > maxRecurringEventDuration || duration%time.Minute != 0 {
+			return fmt.Errorf("%s.duration must be a whole number of minutes between 1m and %s", field, maxRecurringEventDuration)
 		}
 	}
 	return nil

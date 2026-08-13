@@ -1,0 +1,15 @@
+{
+  "client_version": "0.11.0-dev.4",
+  "compatibility_id": "antistatic-v1",
+  "event_id": "random-event-id-4004",
+  "platform": "linux",
+  "arch": "x86_64",
+  "renderer_family": "vulkan",
+  "gpu_vendor": "amd",
+  "memory_gib_bucket": "16-31",
+  "cpu_cores_bucket": "5-8",
+  "resolution_bucket": "1440p",
+  "sample_frames": 600,
+  "frame_ms_avg": 8.2,
+  "frame_ms_p95": 11.4
+}

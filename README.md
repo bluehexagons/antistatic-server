@@ -640,7 +640,7 @@ and adding/changing the `server` property there. This config is loaded when the 
 ## Logging
 The server uses structured JSON logging via `log/slog`. Example log output:
 ```json
-{"time":"2026-04-27T09:17:56.123Z","level":"INFO","msg":"Lobby request","requestID":"abc123","method":"PUT","version":"0.9.5"}
+{"time":"2026-08-13T09:17:56.123Z","level":"ERROR","msg":"Request rejected: invalid remote address","requestID":"abc123"}
 ```
 
 Request logs deliberately omit addresses, tokens, lobby/ticket identifiers,
@@ -651,6 +651,14 @@ Build and run with Docker:
 ```bash
 docker build -t antistatic-server .
 docker run -p 80:80 -p 443:443 antistatic-server
+```
+
+Mount a customized game profile read-only and select it explicitly:
+
+```bash
+docker run -p 80:80 -p 443:443 \
+  -v /host/config/my-game.json:/config/my-game.json:ro \
+  antistatic-server -config /config/my-game.json
 ```
 
 Persist reports and enable the TLS-only admin UI with a mounted data volume:
@@ -671,7 +679,7 @@ docker run -p 80:80 -p 443:443 -v antistatic-certs:/certs antistatic-server -aut
 ```
 
 ## Building
-Requires Go 1.25 or later.
+Requires Go 1.26.5 or later.
 
 ```bash
 go build -o antistatic-server .

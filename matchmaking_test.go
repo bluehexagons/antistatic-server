@@ -23,6 +23,9 @@ func serveMatchmakingRequestWithToken(h *lobbyHandler, method, target, remoteAdd
 	return serveMatchmakingRequestWithTokenAndTags(h, method, target, remoteAddr, body, token, "", "", "")
 }
 
+// This helper's target is a compact test tuple containing identity, queue,
+// ticket, and port. It always emits the current /api/v1 JSON contract; the
+// removed network routes are tested directly in TestLegacyProtocolRoutesAreRemoved.
 func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, remoteAddr string, body any, token, selfTag, peerTag, tagToken string) *httptest.ResponseRecorder {
 	rawTarget, query, _ := strings.Cut(target, "?")
 	parts := strings.Split(strings.Trim(rawTarget, "/"), "/")
@@ -1419,7 +1422,12 @@ func TestMatchmakingCleanupDropsStaleTickets(t *testing.T) {
 
 func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 	h := newTestLobbyHandler()
-	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/bad!queue/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
+	rec := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/0", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("zero-port status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/bad!queue/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid queue status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -1435,5 +1443,15 @@ func TestMatchmakingRejectsInvalidValues(t *testing.T) {
 	rec = serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", json.RawMessage(`{"metadata":{"character":"Carbon"}} {}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("trailing JSON status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, strings.Repeat("a", maxBearerTokenLength+1))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized bearer status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	rec = serveMatchmakingRequestWithTokenAndTags(h, http.MethodPut, "/0.9.5/matchmaking/code/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, "", "ABCD", "EFGH", strings.Repeat("a", maxBearerTokenLength+1))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized tag token status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
