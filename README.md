@@ -164,6 +164,12 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 
 ## Endpoints
 
+[`protocol/openapi.json`](protocol/openapi.json) is the OpenAPI 3.1 source of
+truth for the JSON API. `npm run generate` updates the published TypeScript
+declarations, while `npm run check` validates local references and shared
+fixtures and fails if the generated file is stale. The package intentionally
+adds no runtime validation or handler generation to the server.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | JSON health check with live counts, split HTTP/game error logs, and aggregate activity |

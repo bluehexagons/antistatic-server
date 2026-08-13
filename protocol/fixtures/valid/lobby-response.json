@@ -1,0 +1,14 @@
+{
+  "lobby": {
+    "key": "ABC123",
+    "members": [
+      {
+        "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
+        "local_ips": ["192.168.1.10"],
+        "local_endpoints": [{ "ip": "192.168.1.10", "port": 45860 }]
+      }
+    ]
+  },
+  "endpoint": { "ip": "198.51.100.10", "port": 45860 },
+  "token": "owner-token"
+}

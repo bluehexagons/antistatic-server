@@ -1,4 +1,4 @@
-/** Exact JSON wire types for antistatic-server API v1. */
+/** Generated from protocol/openapi.json. Do not edit directly. */
 
 export type ClientIdentity = {
   client_version: string;
@@ -46,7 +46,7 @@ export type CommunityQueueEvent = {
   id: string;
   name: string;
   region: string;
-  weekday: string;
+  weekday: "Sunday" | "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday" | "Saturday";
   start_hour_utc: number;
   start_minute_utc: number;
   duration_minutes: number;
@@ -61,8 +61,9 @@ export type EventsResponse = {
 
 export type MatchmakingMetadata = Record<string, string>;
 
-export type AntistaticMatchmakingMetadata = MatchmakingMetadata & {
+export type AntistaticMatchmakingMetadata = {
   character: string;
+  [key: string]: string;
 };
 
 export type MatchCodeClaim = {
@@ -71,10 +72,10 @@ export type MatchCodeClaim = {
   self_tag_token?: string;
 };
 
-export type MatchmakingRequest<Metadata extends MatchmakingMetadata = AntistaticMatchmakingMetadata> = ClientIdentity & {
+export type MatchmakingRequest = ClientIdentity & {
   queue: string;
   port: number;
-  metadata: Metadata;
+  metadata: AntistaticMatchmakingMetadata;
   local_ips?: string[];
   local_endpoints?: Endpoint[];
   match_code?: MatchCodeClaim;
@@ -85,17 +86,17 @@ export type MatchmakingCancelRequest = ClientIdentity & {
   match_code?: MatchCodeClaim;
 };
 
-export type MatchmakingPeer<Metadata extends MatchmakingMetadata = AntistaticMatchmakingMetadata> = LobbyMember & {
-  metadata: Metadata;
+export type MatchmakingPeer = LobbyMember & {
+  metadata: AntistaticMatchmakingMetadata;
 };
 
-export type MatchmakingRole = 'host' | 'client';
+export type MatchmakingRole = "host" | "client";
 
-export type MatchmakingMatch<Metadata extends MatchmakingMetadata = AntistaticMatchmakingMetadata> = {
+export type MatchmakingMatch = {
   id: string;
   role: MatchmakingRole;
-  peer: MatchmakingPeer<Metadata>;
-  self: MatchmakingPeer<Metadata>;
+  peer: MatchmakingPeer;
+  self: MatchmakingPeer;
   matched_at_ms?: number;
 };
 
@@ -112,7 +113,7 @@ export type MatchmakingQueue = {
   queue_expiration_count?: number;
 };
 
-type MatchmakingResponseBase = {
+export type MatchmakingResponseBase = {
   ticket: string;
   endpoints: Endpoint[];
   token: string;
@@ -122,35 +123,23 @@ type MatchmakingResponseBase = {
 };
 
 export type MatchmakingWaitingResponse = MatchmakingResponseBase & {
-  status: 'waiting';
+  status: "waiting";
   match?: never;
 };
 
-export type MatchmakingMatchedResponse<
-  Metadata extends MatchmakingMetadata = AntistaticMatchmakingMetadata,
-> = MatchmakingResponseBase & {
-  status: 'matched';
-  match: MatchmakingMatch<Metadata>;
+export type MatchmakingMatchedResponse = MatchmakingResponseBase & {
+  status: "matched";
+  match: MatchmakingMatch;
 };
 
 export type MatchmakingCanceledResponse = MatchmakingResponseBase & {
-  status: 'canceled';
+  status: "canceled";
   match?: never;
 };
 
-export type MatchmakingResponse<Metadata extends MatchmakingMetadata = AntistaticMatchmakingMetadata> =
-  | MatchmakingWaitingResponse
-  | MatchmakingMatchedResponse<Metadata>
-  | MatchmakingCanceledResponse;
+export type MatchmakingResponse = MatchmakingWaitingResponse | MatchmakingMatchedResponse | MatchmakingCanceledResponse;
 
-export type MatchmakingOutcome =
-  | 'match_connected'
-  | 'match_connect_failed'
-  | 'match_handshake_failed'
-  | 'match_runtime_error'
-  | 'match_sim_desync'
-  | 'match_rollback_refused'
-  | 'match_peer_timeout';
+export type MatchmakingOutcome = "match_connected" | "match_connect_failed" | "match_handshake_failed" | "match_runtime_error" | "match_sim_desync" | "match_rollback_refused" | "match_peer_timeout";
 
 export type MatchmakingOutcomeRequest = ClientIdentity & {
   queue: string;
@@ -162,34 +151,36 @@ export type ReportResponse = {
   report_id: string;
 };
 
-export type Platform = 'windows' | 'linux' | 'macos' | 'steamdeck' | 'unknown';
+export type Platform = "windows" | "linux" | "macos" | "steamdeck" | "unknown";
 
 export type CrashReportRequest = ClientIdentity & {
-  event_id: string;
+  event_id: EventID;
   platform: Platform;
   arch: string;
   reason_code: string;
   symbols: string[];
 };
 
-export type FeedbackCategory = 'bug' | 'feedback' | 'other';
+export type EventID = string;
+
+export type FeedbackCategory = "bug" | "feedback" | "other";
 
 export type FeedbackRequest = ClientIdentity & {
-  event_id: string;
+  event_id: EventID;
   category: FeedbackCategory;
   subject: string;
   body: string;
   related_report_id?: string;
 };
 
-export type GameplayResult = 'win' | 'loss' | 'draw' | 'unknown' | 'quit';
+export type GameplayResult = "win" | "loss" | "draw" | "unknown" | "quit";
 
 export type GameplayMetricRequest = ClientIdentity & {
-  event_id: string;
-  mode: string;
-  stage: string;
-  character: string;
-  opponent_character: string;
+  event_id: EventID;
+  mode: CoarseIdentifier;
+  stage: CoarseIdentifier;
+  character: CoarseIdentifier;
+  opponent_character: CoarseIdentifier;
   online: boolean;
   completed: boolean;
   duration_frames: number;
@@ -198,33 +189,20 @@ export type GameplayMetricRequest = ClientIdentity & {
   result: GameplayResult;
 };
 
-export type RendererFamily =
-  | 'opengl'
-  | 'vulkan'
-  | 'metal'
-  | 'direct3d11'
-  | 'direct3d12'
-  | 'webgl'
-  | 'other'
-  | 'unknown';
+export type CoarseIdentifier = string;
 
-export type GPUVendor =
-  | 'amd'
-  | 'intel'
-  | 'nvidia'
-  | 'apple'
-  | 'qualcomm'
-  | 'arm'
-  | 'imagination'
-  | 'other'
-  | 'unknown';
+export type RendererFamily = "opengl" | "vulkan" | "metal" | "direct3d11" | "direct3d12" | "webgl" | "other" | "unknown";
 
-export type MemoryGiBBucket = 'under-4' | '4-7' | '8-15' | '16-31' | '32-63' | '64-plus' | 'unknown';
-export type CPUCoresBucket = '1-2' | '3-4' | '5-8' | '9-16' | '17-plus' | 'unknown';
-export type ResolutionBucket = '720p-or-less' | '1080p' | '1440p' | '2160p-or-more' | 'other' | 'unknown';
+export type GPUVendor = "amd" | "intel" | "nvidia" | "apple" | "qualcomm" | "arm" | "imagination" | "other" | "unknown";
+
+export type MemoryGiBBucket = "under-4" | "4-7" | "8-15" | "16-31" | "32-63" | "64-plus" | "unknown";
+
+export type CPUCoresBucket = "1-2" | "3-4" | "5-8" | "9-16" | "17-plus" | "unknown";
+
+export type ResolutionBucket = "720p-or-less" | "1080p" | "1440p" | "2160p-or-more" | "other" | "unknown";
 
 export type PerformanceMetricRequest = ClientIdentity & {
-  event_id: string;
+  event_id: EventID;
   platform: Platform;
   arch: string;
   renderer_family: RendererFamily;
@@ -262,12 +240,12 @@ export type ActivityHour = {
 
 export type ActivitySummary = {
   window_days: number;
-  timezone: 'UTC';
+  timezone: "UTC";
   hours: ActivityHour[];
 };
 
 export type HealthResponse = {
-  status: 'ok';
+  status: "ok";
   start_time: string;
   lobby_count: number;
   ticket_count: number;

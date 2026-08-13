@@ -1,0 +1,465 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "antistatic-server coordination API",
+    "version": "1.0.0",
+    "description": "Current coordination, matchmaking, reporting, and health contract."
+  },
+  "servers": [{ "url": "/" }],
+  "paths": {
+    "/api/v1/lobbies/{key}": {
+      "parameters": [{ "$ref": "#/components/parameters/LobbyKey" }],
+      "put": {
+        "operationId": "checkInLobby",
+        "requestBody": { "$ref": "#/components/requestBodies/LobbyCheckIn" },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Lobby" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      },
+      "delete": {
+        "operationId": "leaveLobby",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "$ref": "#/components/requestBodies/LobbyLeave" },
+        "responses": {
+          "204": { "description": "Lobby membership removed" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      }
+    },
+    "/api/v1/matchmaking/{ticket}": {
+      "parameters": [{ "$ref": "#/components/parameters/MatchmakingTicket" }],
+      "put": {
+        "operationId": "putMatchmakingTicket",
+        "security": [{}, { "bearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/LongPollWait" }],
+        "requestBody": { "$ref": "#/components/requestBodies/Matchmaking" },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Matchmaking" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      },
+      "delete": {
+        "operationId": "cancelMatchmakingTicket",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "$ref": "#/components/requestBodies/MatchmakingCancel" },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Matchmaking" },
+          "204": { "description": "Ticket was already absent" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      }
+    },
+    "/api/v1/matchmaking/{ticket}/outcome": {
+      "parameters": [{ "$ref": "#/components/parameters/MatchmakingTicket" }],
+      "post": {
+        "operationId": "reportMatchmakingOutcome",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": { "$ref": "#/components/requestBodies/MatchmakingOutcome" },
+        "responses": {
+          "200": { "$ref": "#/components/responses/Report" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      }
+    },
+    "/api/v1/reports/crash": {
+      "post": {
+        "operationId": "submitCrashReport",
+        "requestBody": { "$ref": "#/components/requestBodies/CrashReport" },
+        "responses": {
+          "201": { "$ref": "#/components/responses/Report" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      }
+    },
+    "/api/v1/reports/feedback": {
+      "post": {
+        "operationId": "submitFeedback",
+        "requestBody": { "$ref": "#/components/requestBodies/Feedback" },
+        "responses": {
+          "201": { "$ref": "#/components/responses/Report" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      }
+    },
+    "/api/v1/metrics/gameplay": {
+      "post": {
+        "operationId": "submitGameplayMetric",
+        "requestBody": { "$ref": "#/components/requestBodies/GameplayMetric" },
+        "responses": {
+          "204": { "description": "Metric accepted" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      }
+    },
+    "/api/v1/metrics/performance": {
+      "post": {
+        "operationId": "submitPerformanceMetric",
+        "requestBody": { "$ref": "#/components/requestBodies/PerformanceMetric" },
+        "responses": {
+          "204": { "description": "Metric accepted" },
+          "426": { "$ref": "#/components/responses/IncompatibleClient" }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "operationId": "listEvents",
+        "responses": { "200": { "$ref": "#/components/responses/Events" } }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": { "200": { "$ref": "#/components/responses/Health" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer" }
+    },
+    "parameters": {
+      "LobbyKey": {
+        "name": "key",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "MatchmakingTicket": {
+        "name": "ticket",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 64 }
+      },
+      "LongPollWait": {
+        "name": "wait",
+        "in": "query",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "requestBodies": {
+      "LobbyCheckIn": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LobbyCheckInRequest" } } } },
+      "LobbyLeave": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LobbyLeaveRequest" } } } },
+      "Matchmaking": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MatchmakingRequest" } } } },
+      "MatchmakingCancel": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MatchmakingCancelRequest" } } } },
+      "MatchmakingOutcome": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MatchmakingOutcomeRequest" } } } },
+      "CrashReport": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CrashReportRequest" } } } },
+      "Feedback": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FeedbackRequest" } } } },
+      "GameplayMetric": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GameplayMetricRequest" } } } },
+      "PerformanceMetric": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PerformanceMetricRequest" } } } }
+    },
+    "responses": {
+      "Lobby": { "description": "Current lobby snapshot", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LobbyResponse" } } } },
+      "Matchmaking": { "description": "Current ticket state", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MatchmakingResponse" } } } },
+      "Report": { "description": "Stable anonymous report identifier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReportResponse" } } } },
+      "Events": { "description": "Configured recurring events", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EventsResponse" } } } },
+      "Health": { "description": "Service health and aggregate activity", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } } },
+      "IncompatibleClient": { "description": "Client compatibility identifier is not admitted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/APIErrorResponse" } } } }
+    },
+    "schemas": {
+      "ClientIdentity": {
+        "type": "object",
+        "required": ["client_version", "compatibility_id"],
+        "properties": {
+          "client_version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$" },
+          "compatibility_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" }
+        }
+      },
+      "APIErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" },
+          "expected_compatibility_id": { "type": "string" }
+        }
+      },
+      "Endpoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ip", "port"],
+        "properties": {
+          "ip": { "type": "string", "maxLength": 64 },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        }
+      },
+      "LobbyCheckInRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          {
+            "type": "object",
+            "required": ["port"],
+            "properties": {
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+              "local_ips": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 64 } },
+              "local_endpoints": { "type": "array", "maxItems": 8, "items": { "$ref": "#/components/schemas/Endpoint" } }
+            }
+          }
+        ]
+      },
+      "LobbyLeaveRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          { "type": "object", "required": ["port"], "properties": { "port": { "type": "integer", "minimum": 1, "maximum": 65535 } } }
+        ]
+      },
+      "LobbyMember": {
+        "type": "object",
+        "required": ["endpoints"],
+        "properties": {
+          "endpoints": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/components/schemas/Endpoint" } },
+          "local_ips": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 64 } },
+          "local_endpoints": { "type": "array", "maxItems": 8, "items": { "$ref": "#/components/schemas/Endpoint" } }
+        }
+      },
+      "Lobby": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "members"],
+        "properties": {
+          "key": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "members": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/LobbyMember" } }
+        }
+      },
+      "LobbyResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lobby", "endpoint", "token"],
+        "properties": {
+          "lobby": { "$ref": "#/components/schemas/Lobby" },
+          "endpoint": { "$ref": "#/components/schemas/Endpoint" },
+          "token": { "type": "string", "minLength": 1, "maxLength": 512 }
+        }
+      },
+      "CommunityQueueEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "region", "weekday", "start_hour_utc", "start_minute_utc", "duration_minutes", "active", "starts_at_utc", "ends_at_utc"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "region": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "weekday": { "type": "string", "enum": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] },
+          "start_hour_utc": { "type": "integer", "minimum": 0, "maximum": 23 },
+          "start_minute_utc": { "type": "integer", "minimum": 0, "maximum": 59 },
+          "duration_minutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+          "active": { "type": "boolean" },
+          "starts_at_utc": { "type": "string", "format": "date-time" },
+          "ends_at_utc": { "type": "string", "format": "date-time" }
+        }
+      },
+      "EventsResponse": { "type": "object", "additionalProperties": false, "required": ["events"], "properties": { "events": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/CommunityQueueEvent" } } } },
+      "MatchmakingMetadata": { "type": "object", "additionalProperties": { "type": "string" } },
+      "AntistaticMatchmakingMetadata": { "type": "object", "additionalProperties": { "type": "string" }, "required": ["character"], "properties": { "character": { "type": "string", "minLength": 1, "maxLength": 64 } } },
+      "MatchCodeClaim": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["self_tag", "peer_tag"],
+        "properties": {
+          "self_tag": { "type": "string", "minLength": 1, "maxLength": 16 },
+          "peer_tag": { "type": "string", "minLength": 1, "maxLength": 16 },
+          "self_tag_token": { "type": "string", "maxLength": 512 }
+        }
+      },
+      "MatchmakingRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          {
+            "type": "object",
+            "required": ["queue", "port", "metadata"],
+            "properties": {
+              "queue": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+              "metadata": { "$ref": "#/components/schemas/AntistaticMatchmakingMetadata" },
+              "local_ips": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 64 } },
+              "local_endpoints": { "type": "array", "maxItems": 8, "items": { "$ref": "#/components/schemas/Endpoint" } },
+              "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" }
+            }
+          }
+        ]
+      },
+      "MatchmakingCancelRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          { "type": "object", "required": ["queue"], "properties": { "queue": { "type": "string", "minLength": 1, "maxLength": 64 }, "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" } } }
+        ]
+      },
+      "MatchmakingPeer": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/LobbyMember" },
+          { "type": "object", "required": ["metadata"], "properties": { "metadata": { "$ref": "#/components/schemas/AntistaticMatchmakingMetadata" } } }
+        ]
+      },
+      "MatchmakingRole": { "type": "string", "enum": ["host", "client"] },
+      "MatchmakingMatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "role", "peer", "self"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "role": { "$ref": "#/components/schemas/MatchmakingRole" },
+          "peer": { "$ref": "#/components/schemas/MatchmakingPeer" },
+          "self": { "$ref": "#/components/schemas/MatchmakingPeer" },
+          "matched_at_ms": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "MatchmakingQueue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["players_waiting"],
+        "properties": {
+          "players_waiting": { "type": "integer", "minimum": 0 },
+          "own_wait_ms": { "type": "integer", "minimum": 0 },
+          "oldest_wait_ms": { "type": "integer", "minimum": 0 },
+          "queue_attempt_count": { "type": "integer", "minimum": 0 },
+          "match_count": { "type": "integer", "minimum": 0 },
+          "average_match_wait_ms": { "type": "integer", "minimum": 0 },
+          "match_connection_success_count": { "type": "integer", "minimum": 0 },
+          "match_connection_failure_count": { "type": "integer", "minimum": 0 },
+          "queue_cancellation_count": { "type": "integer", "minimum": 0 },
+          "queue_expiration_count": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "MatchmakingResponseBase": {
+        "type": "object",
+        "required": ["ticket", "endpoints", "token"],
+        "properties": {
+          "ticket": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "endpoints": { "type": "array", "maxItems": 4, "items": { "$ref": "#/components/schemas/Endpoint" } },
+          "token": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "tag_token": { "type": "string", "maxLength": 512 },
+          "queue": { "$ref": "#/components/schemas/MatchmakingQueue" },
+          "events": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/CommunityQueueEvent" } }
+        }
+      },
+      "MatchmakingWaitingResponse": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/MatchmakingResponseBase" },
+          { "type": "object", "required": ["status"], "properties": { "status": { "const": "waiting" }, "match": false } }
+        ]
+      },
+      "MatchmakingMatchedResponse": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/MatchmakingResponseBase" },
+          { "type": "object", "required": ["status", "match"], "properties": { "status": { "const": "matched" }, "match": { "$ref": "#/components/schemas/MatchmakingMatch" } } }
+        ]
+      },
+      "MatchmakingCanceledResponse": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/MatchmakingResponseBase" },
+          { "type": "object", "required": ["status"], "properties": { "status": { "const": "canceled" }, "match": false } }
+        ]
+      },
+      "MatchmakingResponse": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/MatchmakingWaitingResponse" },
+          { "$ref": "#/components/schemas/MatchmakingMatchedResponse" },
+          { "$ref": "#/components/schemas/MatchmakingCanceledResponse" }
+        ],
+        "discriminator": { "propertyName": "status" }
+      },
+      "MatchmakingOutcome": { "type": "string", "enum": ["match_connected", "match_connect_failed", "match_handshake_failed", "match_runtime_error", "match_sim_desync", "match_rollback_refused", "match_peer_timeout"] },
+      "MatchmakingOutcomeRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          { "type": "object", "required": ["queue", "event"], "properties": { "queue": { "type": "string", "minLength": 1, "maxLength": 64 }, "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" }, "event": { "$ref": "#/components/schemas/MatchmakingOutcome" } } }
+        ]
+      },
+      "ReportResponse": { "type": "object", "additionalProperties": false, "required": ["report_id"], "properties": { "report_id": { "type": "string", "pattern": "^(cr|fb|nr)-[a-f0-9]{16}$" } } },
+      "Platform": { "type": "string", "enum": ["windows", "linux", "macos", "steamdeck", "unknown"] },
+      "CrashReportRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          { "type": "object", "required": ["event_id", "platform", "arch", "reason_code", "symbols"], "properties": { "event_id": { "$ref": "#/components/schemas/EventID" }, "platform": { "$ref": "#/components/schemas/Platform" }, "arch": { "type": "string", "minLength": 1, "maxLength": 32 }, "reason_code": { "type": "string", "minLength": 1, "maxLength": 64 }, "symbols": { "type": "array", "maxItems": 48, "items": { "type": "string", "maxLength": 120 } } } }
+        ]
+      },
+      "EventID": { "type": "string", "minLength": 16, "maxLength": 80, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{15,79}$" },
+      "FeedbackCategory": { "type": "string", "enum": ["bug", "feedback", "other"] },
+      "FeedbackRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          { "type": "object", "required": ["event_id", "category", "subject", "body"], "properties": { "event_id": { "$ref": "#/components/schemas/EventID" }, "category": { "$ref": "#/components/schemas/FeedbackCategory" }, "subject": { "type": "string", "minLength": 1, "maxLength": 120 }, "body": { "type": "string", "minLength": 1, "maxLength": 6000 }, "related_report_id": { "type": "string", "pattern": "^(cr|fb|nr)-[a-f0-9]{16}$" } } }
+        ]
+      },
+      "GameplayResult": { "type": "string", "enum": ["win", "loss", "draw", "unknown", "quit"] },
+      "GameplayMetricRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          { "type": "object", "required": ["event_id", "mode", "stage", "character", "opponent_character", "online", "completed", "duration_frames", "local_players", "cpu_players", "result"], "properties": { "event_id": { "$ref": "#/components/schemas/EventID" }, "mode": { "$ref": "#/components/schemas/CoarseIdentifier" }, "stage": { "$ref": "#/components/schemas/CoarseIdentifier" }, "character": { "$ref": "#/components/schemas/CoarseIdentifier" }, "opponent_character": { "$ref": "#/components/schemas/CoarseIdentifier" }, "online": { "type": "boolean" }, "completed": { "type": "boolean" }, "duration_frames": { "type": "integer", "minimum": 0, "maximum": 10000000 }, "local_players": { "type": "integer", "minimum": 0, "maximum": 8 }, "cpu_players": { "type": "integer", "minimum": 0, "maximum": 8 }, "result": { "$ref": "#/components/schemas/GameplayResult" } } }
+        ]
+      },
+      "CoarseIdentifier": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$" },
+      "RendererFamily": { "type": "string", "enum": ["opengl", "vulkan", "metal", "direct3d11", "direct3d12", "webgl", "other", "unknown"] },
+      "GPUVendor": { "type": "string", "enum": ["amd", "intel", "nvidia", "apple", "qualcomm", "arm", "imagination", "other", "unknown"] },
+      "MemoryGiBBucket": { "type": "string", "enum": ["under-4", "4-7", "8-15", "16-31", "32-63", "64-plus", "unknown"] },
+      "CPUCoresBucket": { "type": "string", "enum": ["1-2", "3-4", "5-8", "9-16", "17-plus", "unknown"] },
+      "ResolutionBucket": { "type": "string", "enum": ["720p-or-less", "1080p", "1440p", "2160p-or-more", "other", "unknown"] },
+      "PerformanceMetricRequest": {
+        "unevaluatedProperties": false,
+        "allOf": [
+          { "$ref": "#/components/schemas/ClientIdentity" },
+          { "type": "object", "required": ["event_id", "platform", "arch", "renderer_family", "gpu_vendor", "memory_gib_bucket", "cpu_cores_bucket", "resolution_bucket", "sample_frames", "frame_ms_avg", "frame_ms_p95"], "properties": { "event_id": { "$ref": "#/components/schemas/EventID" }, "platform": { "$ref": "#/components/schemas/Platform" }, "arch": { "type": "string", "minLength": 1, "maxLength": 32 }, "renderer_family": { "$ref": "#/components/schemas/RendererFamily" }, "gpu_vendor": { "$ref": "#/components/schemas/GPUVendor" }, "memory_gib_bucket": { "$ref": "#/components/schemas/MemoryGiBBucket" }, "cpu_cores_bucket": { "$ref": "#/components/schemas/CPUCoresBucket" }, "resolution_bucket": { "$ref": "#/components/schemas/ResolutionBucket" }, "sample_frames": { "type": "integer", "minimum": 1, "maximum": 1000000 }, "frame_ms_avg": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 }, "frame_ms_p95": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 } } }
+        ]
+      },
+      "RecentHTTPError": { "type": "object", "additionalProperties": false, "required": ["time", "code", "status"], "properties": { "time": { "type": "string", "format": "date-time" }, "code": { "type": "string" }, "status": { "type": "integer" } } },
+      "RecentGameError": { "type": "object", "additionalProperties": false, "required": ["time", "code"], "properties": { "time": { "type": "string", "format": "date-time" }, "code": { "type": "string" } } },
+      "ActivityHour": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hour_utc"],
+        "properties": {
+          "hour_utc": { "type": "integer", "minimum": 0, "maximum": 23 },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "matches": { "type": "integer", "minimum": 0 },
+          "match_successes": { "type": "integer", "minimum": 0 },
+          "match_failures": { "type": "integer", "minimum": 0 },
+          "queue_cancellations": { "type": "integer", "minimum": 0 },
+          "queue_expirations": { "type": "integer", "minimum": 0 },
+          "average_match_wait_ms": { "type": "integer", "minimum": 0 },
+          "suppressed": { "type": "boolean" }
+        }
+      },
+      "ActivitySummary": { "type": "object", "additionalProperties": false, "required": ["window_days", "timezone", "hours"], "properties": { "window_days": { "type": "integer", "minimum": 1 }, "timezone": { "const": "UTC" }, "hours": { "type": "array", "maxItems": 24, "items": { "$ref": "#/components/schemas/ActivityHour" } } } },
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "start_time", "lobby_count", "ticket_count", "match_count", "tag_lease_count", "lobbies_created", "successful_matches", "queue_attempt_count", "match_connection_success_count", "match_connection_failure_count", "queue_cancellation_count", "queue_expiration_count", "http_error_count", "game_error_count", "activity", "events", "version"],
+        "properties": {
+          "status": { "const": "ok" },
+          "start_time": { "type": "string", "format": "date-time" },
+          "lobby_count": { "type": "integer", "minimum": 0 },
+          "ticket_count": { "type": "integer", "minimum": 0 },
+          "match_count": { "type": "integer", "minimum": 0 },
+          "tag_lease_count": { "type": "integer", "minimum": 0 },
+          "lobbies_created": { "type": "integer", "minimum": 0 },
+          "successful_matches": { "type": "integer", "minimum": 0 },
+          "queue_attempt_count": { "type": "integer", "minimum": 0 },
+          "match_connection_success_count": { "type": "integer", "minimum": 0 },
+          "match_connection_failure_count": { "type": "integer", "minimum": 0 },
+          "queue_cancellation_count": { "type": "integer", "minimum": 0 },
+          "queue_expiration_count": { "type": "integer", "minimum": 0 },
+          "http_error_count": { "type": "integer", "minimum": 0 },
+          "game_error_count": { "type": "integer", "minimum": 0 },
+          "http_errors": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RecentHTTPError" } },
+          "game_errors": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RecentGameError" } },
+          "activity": { "$ref": "#/components/schemas/ActivitySummary" },
+          "events": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/CommunityQueueEvent" } },
+          "version": { "type": "string" }
+        }
+      }
+    }
+  }
+}

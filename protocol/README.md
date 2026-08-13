@@ -15,8 +15,10 @@ These declarations provide compile-time checking but do not validate untrusted
 network responses. Validate a response once at the network boundary before
 treating it as one of these types.
 
-Matchmaking declarations are generic over a bounded string metadata object and
-default to the bundled Antistatic shape:
+The checked-in declarations are generated from `protocol/openapi.json` by
+`npm run generate`. `npm run check` fails when generated output is stale.
+The schema uses concrete Antistatic metadata today while keeping metadata in a
+separate component that a source-level adaptation can replace:
 
 ```ts
 type RacingMetadata = Record<string, string> & {
@@ -24,7 +26,8 @@ type RacingMetadata = Record<string, string> & {
   ruleset: string;
 };
 
-type RacingResponse = MatchmakingResponse<RacingMetadata>;
+// Replace AntistaticMatchmakingMetadata in a fork's OpenAPI profile,
+// then regenerate the declarations.
 ```
 
 Stable package versions follow server releases. During coordinated development,

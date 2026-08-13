@@ -1,0 +1,18 @@
+{
+  "status": "matched",
+  "ticket": "TicketA",
+  "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
+  "token": "owner-token",
+  "match": {
+    "id": "antistatic-v1|default|TicketA|TicketB",
+    "role": "host",
+    "peer": {
+      "endpoints": [{ "ip": "198.51.100.20", "port": 70000 }],
+      "metadata": { "character": "Carbon" }
+    },
+    "self": {
+      "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
+      "metadata": { "character": "Silicon" }
+    }
+  }
+}

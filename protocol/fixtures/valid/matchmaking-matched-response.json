@@ -1,0 +1,21 @@
+{
+  "status": "matched",
+  "ticket": "TicketA",
+  "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
+  "token": "owner-token",
+  "match": {
+    "id": "antistatic-v1|default|TicketA|TicketB",
+    "role": "host",
+    "peer": {
+      "endpoints": [{ "ip": "198.51.100.20", "port": 45861 }],
+      "metadata": { "character": "Carbon" }
+    },
+    "self": {
+      "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
+      "metadata": { "character": "Silicon" }
+    },
+    "matched_at_ms": 1784217600000
+  },
+  "queue": { "players_waiting": 0 },
+  "events": []
+}
