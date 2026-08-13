@@ -23,6 +23,20 @@ func reportTestHandler(t *testing.T, store *reportStore) http.Handler {
 }
 
 func postJSON(target, body string) *http.Request {
+	parts := strings.Split(strings.Trim(target, "/"), "/")
+	target = apiPrefix + "/" + strings.Join(parts[1:], "/")
+	var payload map[string]any
+	if json.Unmarshal([]byte(body), &payload) == nil {
+		clientVersion := parts[0]
+		if appVersion, ok := payload["app_version"].(string); ok {
+			clientVersion = appVersion
+			delete(payload, "app_version")
+		}
+		payload["client_version"] = clientVersion
+		payload["compatibility_id"] = DefaultConfig().Service.CompatibilityID
+		data, _ := json.Marshal(payload)
+		body = string(data)
+	}
 	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "198.51.100.10:1234"
@@ -49,13 +63,15 @@ func TestCrashAndMetricEndpointsPersistAndDedupe(t *testing.T) {
 	if err := json.Unmarshal(first.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.ReportID == "" || first.Header().Get(antistaticReportIDHeader) != response.ReportID {
-		t.Fatalf("crash response/header = %#v / %q", response, first.Header().Get(antistaticReportIDHeader))
+	if response.ReportID == "" {
+		t.Fatalf("crash response = %#v", response)
 	}
 	second := httptest.NewRecorder()
 	handler.ServeHTTP(second, postJSON("/1.2.3/reports/crash", crashBody))
-	if second.Code != http.StatusCreated || second.Header().Get(antistaticReportIDHeader) != response.ReportID {
-		t.Fatalf("duplicate crash = %d / %q, want stable ID %q", second.Code, second.Header().Get(antistaticReportIDHeader), response.ReportID)
+	var duplicate reportResponse
+	_ = json.Unmarshal(second.Body.Bytes(), &duplicate)
+	if second.Code != http.StatusCreated || duplicate.ReportID != response.ReportID {
+		t.Fatalf("duplicate crash = %d / %q, want stable ID %q", second.Code, duplicate.ReportID, response.ReportID)
 	}
 	crashes, _ := store.crashes()
 	if len(crashes) != 1 || crashes[0].AppVersion != "1.1.9" {
@@ -87,8 +103,8 @@ func TestCrashAndMetricEndpointsPersistAndDedupe(t *testing.T) {
 	feedbackBody := `{"event_id":"random-event-id-1003","category":"feedback","subject":"Controller feel","body":"The new timing feels better","related_report_id":"` + response.ReportID + `"}`
 	feedbackRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(feedbackRecorder, postJSON("/1.2.3/reports/feedback", feedbackBody))
-	if feedbackRecorder.Code != http.StatusCreated || feedbackRecorder.Header().Get(antistaticReportIDHeader) == "" {
-		t.Fatalf("feedback response = %d / %q: %s", feedbackRecorder.Code, feedbackRecorder.Header().Get(antistaticReportIDHeader), feedbackRecorder.Body.String())
+	if feedbackRecorder.Code != http.StatusCreated || decodeReportID(t, feedbackRecorder) == "" {
+		t.Fatalf("feedback response = %d: %s", feedbackRecorder.Code, feedbackRecorder.Body.String())
 	}
 	performanceBody := `{"event_id":"random-event-id-1004","platform":"linux","arch":"amd64","renderer_family":"vulkan","gpu_vendor":"amd","memory_gib_bucket":"16-31","cpu_cores_bucket":"9-16","resolution_bucket":"1440p","sample_frames":600,"frame_ms_avg":8.4,"frame_ms_p95":12.1}`
 	performanceRecorder := httptest.NewRecorder()
@@ -108,7 +124,7 @@ func TestReportEndpointsEnforceStrictJSONAndPrivacyBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := reportTestHandler(t, store)
-	valid := `{"event_id":"random-event-id-2001","category":"bug","subject":"A subject","body":"A bounded description"}`
+	valid := `{"client_version":"1.2.3","compatibility_id":"antistatic-v1","event_id":"random-event-id-2001","category":"bug","subject":"A subject","body":"A bounded description"}`
 	tests := []struct {
 		name        string
 		contentType string
@@ -124,7 +140,7 @@ func TestReportEndpointsEnforceStrictJSONAndPrivacyBoundary(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "/1.2.3/reports/feedback", strings.NewReader(test.body))
+			request := httptest.NewRequest(http.MethodPost, apiPrefix+"/reports/feedback", strings.NewReader(test.body))
 			request.Header.Set("Content-Type", test.contentType)
 			request.RemoteAddr = "198.51.100.10:1234"
 			request.TLS = &tls.ConnectionState{}
@@ -141,13 +157,16 @@ func TestReportEndpointsEnforceStrictJSONAndPrivacyBoundary(t *testing.T) {
 		t.Fatalf("missing crash symbols status = %d, want 400", missingSymbols.Code)
 	}
 	for name, body := range map[string]string{
-		"missing": `{"event_id":"random-event-id-2005","platform":"linux","arch":"amd64","reason_code":"segfault","symbols":[]}`,
-		"invalid": `{"event_id":"random-event-id-2006","app_version":"bad/version","platform":"linux","arch":"amd64","reason_code":"segfault","symbols":[]}`,
+		"missing": `{"compatibility_id":"antistatic-v1","event_id":"random-event-id-2005","platform":"linux","arch":"amd64","reason_code":"segfault","symbols":[]}`,
+		"invalid": `{"client_version":"bad/version","compatibility_id":"antistatic-v1","event_id":"random-event-id-2006","platform":"linux","arch":"amd64","reason_code":"segfault","symbols":[]}`,
 	} {
 		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, postJSON("/1.2.3/reports/crash", body))
+		request := httptest.NewRequest(http.MethodPost, apiPrefix+"/reports/crash", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.TLS = &tls.ConnectionState{}
+		handler.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusBadRequest {
-			t.Fatalf("%s crash app_version status = %d, want 400", name, recorder.Code)
+			t.Fatalf("%s crash client_version status = %d, want 400", name, recorder.Code)
 		}
 	}
 	missingBooleans := httptest.NewRecorder()
@@ -203,8 +222,7 @@ func TestReportEndpointsRequireHTTPS(t *testing.T) {
 	request := postJSON("/1.2.3/reports/crash", `{}`)
 	request.TLS = nil
 	recorder := httptest.NewRecorder()
-	api := reportAPI{store: store}
-	request.SetPathValue("version", "1.2.3")
+	api := reportAPI{store: store, config: DefaultConfig()}
 	api.crash(recorder, request)
 	if recorder.Code != http.StatusUpgradeRequired {
 		t.Fatalf("plain HTTP report status = %d, want 426", recorder.Code)
@@ -218,10 +236,9 @@ func TestReportEndpointsRateLimitByClientAndPath(t *testing.T) {
 	}
 	limiter := newRateLimiter(1, 1, time.Minute)
 	defer limiter.Stop()
-	api := reportAPI{store: store, limiter: limiter}
+	api := reportAPI{store: store, limiter: limiter, config: DefaultConfig()}
 	for i, eventID := range []string{"random-event-id-4001", "random-event-id-4002"} {
 		request := postJSON("/1.2.3/reports/crash", `{"event_id":"`+eventID+`","app_version":"1.2.3","platform":"linux","arch":"amd64","reason_code":"segfault","symbols":[]}`)
-		request.SetPathValue("version", "1.2.3")
 		recorder := httptest.NewRecorder()
 		api.crash(recorder, request)
 		want := http.StatusCreated

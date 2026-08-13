@@ -5,14 +5,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
 func newTestLobbyHandler() *lobbyHandler {
+	config := DefaultConfig()
+	config.Service.CompatibilityID = "0.9.5"
 	return &lobbyHandler{
-		Config:    DefaultConfig(),
+		Config:    config,
 		Lobbies:   map[string]*Lobby{},
 		Tickets:   map[string]*MatchmakingTicket{},
 		Waiting:   map[string]map[string]*MatchmakingTicket{},
@@ -27,27 +30,41 @@ func serveLobbyRequest(h *lobbyHandler, method, target, remoteAddr string) *http
 }
 
 func serveLobbyRequestWithToken(h *lobbyHandler, method, target, remoteAddr string, token string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, target, nil)
-	req.RemoteAddr = remoteAddr
-	if token != "" {
-		req.Header.Set(antistaticTokenHeader, token)
-	}
-	rec := httptest.NewRecorder()
-
-	h.ServeHTTP(rec, req)
-
-	return rec
+	return serveLobbyRequestWithBody(h, method, target, remoteAddr, token, "")
 }
 
 func serveLobbyRequestWithBody(h *lobbyHandler, method, target, remoteAddr, token, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, target, strings.NewReader(body))
-	req.RemoteAddr = remoteAddr
-	if token != "" {
-		req.Header.Set(antistaticTokenHeader, token)
+	rawTarget, _, _ := strings.Cut(target, "?")
+	parts := strings.Split(strings.Trim(rawTarget, "/"), "/")
+	lobbyIndex := 0
+	if parts[0] != "lobby" {
+		lobbyIndex = 1
+	}
+	key := parts[lobbyIndex+1]
+	port, _ := strconv.Atoi(parts[lobbyIndex+2])
+	payload := map[string]any{
+		"client_version":   "0.9.5",
+		"compatibility_id": h.Config.Service.CompatibilityID,
+		"port":             port,
 	}
 	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			payload = nil
+		}
 	}
+	if payload != nil {
+		payload["client_version"] = "0.9.5"
+		payload["compatibility_id"] = h.Config.Service.CompatibilityID
+		payload["port"] = port
+		data, _ := json.Marshal(payload)
+		body = string(data)
+	}
+	req := httptest.NewRequest(method, apiPrefix+"/lobbies/"+key, strings.NewReader(body))
+	req.RemoteAddr = remoteAddr
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
@@ -154,8 +171,8 @@ func TestVersionedLobbyCheckInIgnoresQueryString(t *testing.T) {
 	if response.Token == "" {
 		t.Fatalf("response token was empty")
 	}
-	if response.Lobby == nil || response.Lobby.Version != "0.9.5" {
-		t.Fatalf("response lobby version = %#v, want 0.9.5", response.Lobby)
+	if response.Lobby == nil || response.Lobby.Key != "ABC123" {
+		t.Fatalf("response lobby = %#v, want ABC123", response.Lobby)
 	}
 	if len(response.Lobby.Members) != 1 || len(response.Lobby.Members[0].Endpoints) != 1 || response.Lobby.Members[0].Endpoints[0].IP != "198.51.100.10" {
 		t.Fatalf("response members = %#v, want one checked-in member", response.Lobby.Members)
@@ -164,52 +181,52 @@ func TestVersionedLobbyCheckInIgnoresQueryString(t *testing.T) {
 	// to guard against is now structurally impossible.
 }
 
-func TestLegacyLobbyRoute(t *testing.T) {
+func TestFixedLobbyRoute(t *testing.T) {
 	h := newTestLobbyHandler()
 	rec := serveLobbyRequest(h, http.MethodPut, "/lobby/ABC123/45860", "198.51.100.20:32000")
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("legacy PUT returned status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+		t.Fatalf("PUT returned status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
 	response := decodeLobbyResponse(t, rec)
 
-	if response.Lobby == nil || response.Lobby.Version != "" {
-		t.Fatalf("legacy lobby version = %#v, want empty version", response.Lobby)
+	if response.Lobby == nil || response.Lobby.Key != "ABC123" {
+		t.Fatalf("lobby = %#v, want ABC123", response.Lobby)
 	}
 	if len(response.Lobby.Members) != 1 || len(response.Lobby.Members[0].Endpoints) != 1 || response.Lobby.Members[0].Endpoints[0].Port != 45860 {
-		t.Fatalf("legacy response members = %#v, want one checked-in member", response.Lobby.Members)
+		t.Fatalf("response members = %#v, want one checked-in member", response.Lobby.Members)
 	}
 }
 
-func TestLobbyCodeIsIsolatedByVersion(t *testing.T) {
+func TestLobbyCodeUsesCompatibilityIdentityInsteadOfClientVersion(t *testing.T) {
 	h := newTestLobbyHandler()
 
 	first := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
 	second := serveLobbyRequest(h, http.MethodPut, "/0.9.6/lobby/ABC123/45861", "198.51.100.20:32001")
 	legacy := serveLobbyRequest(h, http.MethodPut, "/lobby/ABC123/45862", "198.51.100.30:32002")
 
-	for label, rec := range map[string]*httptest.ResponseRecorder{"first": first, "second": second, "legacy": legacy} {
+	for label, rec := range map[string]*httptest.ResponseRecorder{"first": first, "second": second, "third": legacy} {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s PUT returned status %d: %s", label, rec.Code, rec.Body.String())
 		}
-		response := decodeLobbyResponse(t, rec)
-		if len(response.Lobby.Members) != 1 {
-			t.Fatalf("%s lobby members = %#v, want one version-local member", label, response.Lobby.Members)
-		}
 	}
 
-	if got := len(h.Lobbies); got != 3 {
-		t.Fatalf("stored lobbies = %d, want one per route version", got)
+	response := decodeLobbyResponse(t, legacy)
+	if got := len(h.Lobbies); got != 1 || len(response.Lobby.Members) != 3 {
+		t.Fatalf("stored lobbies/members = %d/%d, want one compatible lobby with three members", got, len(response.Lobby.Members))
 	}
 }
 
 func TestLobbyRejectsUnexpectedPathSegments(t *testing.T) {
 	h := newTestLobbyHandler()
-	rec := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860/extra", "198.51.100.10:32000")
+	req := httptest.NewRequest(http.MethodPut, apiPrefix+"/lobbies/ABC123/extra", nil)
+	req.RemoteAddr = "198.51.100.10:32000"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -222,12 +239,51 @@ func TestLobbyRejectsUnsupportedMethod(t *testing.T) {
 	}
 }
 
-func TestLobbyRejectsInvalidVersion(t *testing.T) {
+func TestLobbyRejectsInvalidClientVersion(t *testing.T) {
 	h := newTestLobbyHandler()
-	rec := serveLobbyRequest(h, http.MethodPut, "/bad!version/lobby/ABC123/45860", "198.51.100.10:32000")
+	body := `{"client_version":"bad!version","compatibility_id":"0.9.5","port":45860}`
+	req := httptest.NewRequest(http.MethodPut, apiPrefix+"/lobbies/ABC123", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "198.51.100.10:32000"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAPIV1RejectsIncompatibleClientWithStructuredError(t *testing.T) {
+	h := newTestLobbyHandler()
+	body := `{"client_version":"0.10.8","compatibility_id":"other-game-v1","port":45860}`
+	req := httptest.NewRequest(http.MethodPut, apiPrefix+"/lobbies/ABC123", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "198.51.100.10:32000"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUpgradeRequired {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusUpgradeRequired, rec.Body.String())
+	}
+	var response apiErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error != "incompatible_client" || response.ExpectedCompatibilityID != "0.9.5" {
+		t.Fatalf("response = %#v, want expected compatibility ID", response)
+	}
+}
+
+func TestLegacyProtocolRoutesAreRemoved(t *testing.T) {
+	h := newTestLobbyHandler()
+	for _, path := range []string{"/lobby/ABC123/45860", "/0.9.5/lobby/ABC123/45860", "/0.9.5/matchmaking/default/TicketA/45860"} {
+		req := httptest.NewRequest(http.MethodPut, path, nil)
+		req.RemoteAddr = "198.51.100.10:32000"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("legacy route %s returned %d, want 404", path, rec.Code)
+		}
 	}
 }
 
@@ -360,8 +416,8 @@ func TestLobbyDeleteRequiresMemberToken(t *testing.T) {
 	h.Mu.RUnlock()
 
 	rec = serveLobbyRequestWithToken(h, http.MethodDelete, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", token)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("DELETE with token status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE with token status = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 	h.Mu.RLock()
 	_, ok := h.Lobbies[lobbyStorageKey("0.9.5", "ABC123")]
@@ -386,8 +442,8 @@ func TestLobbyDeleteUsesTokenAcrossAddressFamilies(t *testing.T) {
 		"198.51.100.10:32000",
 		token,
 	)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("cross-family DELETE with token status = %d, want %d", rec.Code, http.StatusOK)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("cross-family DELETE with token status = %d, want %d", rec.Code, http.StatusNoContent)
 	}
 
 	h.Mu.RLock()
@@ -418,7 +474,7 @@ func TestHealthEndpointIncludesMetrics(t *testing.T) {
 	}
 
 	resp := decodeHealthResponse(t, rec)
-	if resp.LobbyCount != 1 || resp.MatchCount != 1 || resp.LobbiesCreated != 1 || resp.SuccessfulMatches != 1 || resp.ClientErrorCount != 1 {
+	if resp.LobbyCount != 1 || resp.MatchCount != 1 || resp.LobbiesCreated != 1 || resp.SuccessfulMatches != 1 || resp.HTTPErrorCount != 1 {
 		t.Fatalf("health payload = %#v, want counters", resp)
 	}
 	if resp.Version != serverVersion {

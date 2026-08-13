@@ -2,12 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -330,7 +327,6 @@ type healthResponse struct {
 	TagLeaseCount     int                   `json:"tag_lease_count"`
 	LobbiesCreated    int64                 `json:"lobbies_created"`
 	SuccessfulMatches int64                 `json:"successful_matches"`
-	MatchCreatedCount int64                 `json:"match_created_count"`
 	QueueAttemptCount int64                 `json:"queue_attempt_count"`
 	MatchSuccessCount int64                 `json:"match_connection_success_count"`
 	MatchFailureCount int64                 `json:"match_connection_failure_count"`
@@ -338,8 +334,6 @@ type healthResponse struct {
 	QueueExpireCount  int64                 `json:"queue_expiration_count"`
 	HTTPErrorCount    int64                 `json:"http_error_count"`
 	GameErrorCount    int64                 `json:"game_error_count"`
-	ClientErrorCount  int64                 `json:"client_error_count"` // deprecated alias
-	ServerErrorCount  int64                 `json:"server_error_count"` // deprecated alias
 	RecentHTTPErrors  []recentError         `json:"http_errors,omitempty"`
 	RecentGameErrors  []recentGameError     `json:"game_errors,omitempty"`
 	Activity          activitySummary       `json:"activity"`
@@ -361,7 +355,6 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		TagLeaseCount:     len(h.TagLeases),
 		LobbiesCreated:    h.Metrics.lobbiesCreated.Load(),
 		SuccessfulMatches: h.Metrics.successfulMatches.Load(),
-		MatchCreatedCount: h.Metrics.successfulMatches.Load(),
 		QueueAttemptCount: h.Metrics.queueAttempts.Load(),
 		MatchSuccessCount: h.Metrics.matchSuccesses.Load(),
 		MatchFailureCount: h.Metrics.matchFailures.Load(),
@@ -369,8 +362,6 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		QueueExpireCount:  h.Metrics.queueExpirations.Load(),
 		HTTPErrorCount:    httpErrorCount,
 		GameErrorCount:    gameErrorCount,
-		ClientErrorCount:  httpErrorCount,
-		ServerErrorCount:  gameErrorCount,
 		RecentHTTPErrors:  httpErrors,
 		RecentGameErrors:  gameErrors,
 		Activity:          h.Metrics.snapshotActivity(time.Now()),
@@ -462,192 +453,36 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch r.Method {
-	case http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodPost:
-	default:
-		h.respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	path := strings.Trim(r.URL.Path, "/")
-	if path == "" {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 4 || parts[0] != "api" || parts[1] != "v1" {
 		h.respondError(w, "Invalid path", http.StatusNotFound)
 		return
 	}
 
-	parts := strings.Split(path, "/")
-	version := ""
-	info := parts
-	if parts[0] != "lobby" {
-		if len(parts) < 2 {
-			h.respondError(w, "Invalid path", http.StatusNotFound)
-			return
-		}
-		version = parts[0]
-		if !validateVersion(version) {
-			h.respondError(w, "Invalid version", http.StatusBadRequest)
-			return
-		}
-		info = parts[1:]
-	}
-	if len(info) < 1 || info[0] != "lobby" {
-		if len(info) < 1 || info[0] != "matchmaking" {
-			h.respondError(w, "Invalid path", http.StatusNotFound)
-			return
-		}
-	}
-
-	if r.Method == "OPTIONS" {
-		return
-	}
-
-	if r.Method == http.MethodPost {
-		if info[0] != "matchmaking" || len(info) != 5 || info[4] != "report" {
+	switch parts[2] {
+	case "lobbies":
+		if len(parts) != 4 || (r.Method != http.MethodPut && r.Method != http.MethodDelete) {
 			h.respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !h.Config.Features.MatchmakingReports {
-			h.respondError(w, "Not found", http.StatusNotFound)
+		h.serveLobby(w, r, ip, parts[3])
+	case "matchmaking":
+		if len(parts) == 5 && parts[4] == "outcome" && r.Method == http.MethodPost {
+			if !h.Config.Features.MatchmakingReports {
+				h.respondError(w, "Not found", http.StatusNotFound)
+				return
+			}
+			h.serveGameReport(w, r, parts[3])
 			return
 		}
-		port, err := strconv.Atoi(info[3])
-		if err != nil || !validatePort(port) {
-			h.respondError(w, "Invalid port", http.StatusBadRequest)
+		if len(parts) != 4 || (r.Method != http.MethodPut && r.Method != http.MethodDelete) {
+			h.respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		h.serveGameReport(w, r, version, info[1], info[2], port)
-		return
+		h.serveMatchmaking(w, r, ip, parts[3])
+	default:
+		h.respondError(w, "Invalid path", http.StatusNotFound)
 	}
-
-	if info[0] == "lobby" {
-		if len(info) != 3 {
-			h.respondError(w, "Missing parameters", http.StatusBadRequest)
-			return
-		}
-
-		key := info[1]
-		if !validateLobbyKey(key) {
-			h.respondError(w, "Invalid lobby key", http.StatusBadRequest)
-			slog.Error("Request rejected: invalid lobby key", "requestID", getRequestID(r))
-			return
-		}
-
-		port, err := strconv.Atoi(info[2])
-		if err != nil || !validatePort(port) {
-			h.respondError(w, "Invalid port", http.StatusBadRequest)
-			return
-		}
-
-		slog.Info("Lobby request", "requestID", getRequestID(r), "method", r.Method, "version", version)
-		token := r.Header.Get(antistaticTokenHeader)
-		storageKey := lobbyStorageKey(version, key)
-
-		var checkInData lobbyCheckInData
-		if r.Method == "PUT" {
-			parsed, err := parseLobbyCheckInBody(r)
-			if err != nil {
-				h.respondError(w, "Invalid lobby request body", http.StatusBadRequest)
-				return
-			}
-			checkInData = parsed
-		}
-
-		h.Mu.Lock()
-		l, ok := h.Lobbies[storageKey]
-		if !ok {
-			if r.Method == "DELETE" {
-				h.Mu.Unlock()
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			if len(h.Lobbies) >= maxLobbies {
-				h.Mu.Unlock()
-				h.respondError(w, "Server busy", http.StatusServiceUnavailable)
-				return
-			}
-
-			l = &Lobby{Key: key, Version: version}
-
-			if r.Method == "PUT" {
-				h.Lobbies[storageKey] = l
-				h.Metrics.recordLobbyCreated()
-				slog.Info("Created lobby", "requestID", getRequestID(r), "version", version)
-			}
-		} else {
-			l.Clean(time.Now(), h.Config.Timeouts.LobbyMember.Duration())
-		}
-
-		memberToken := token
-		switch r.Method {
-		case "PUT":
-			var err error
-			memberToken, err = l.CheckIn(ip, port, token, checkInData.LocalIPs, checkInData.LocalEndpoints)
-			if err == errLobbyMemberTokenMismatch {
-				h.Mu.Unlock()
-				h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
-				return
-			}
-			if err == errLobbyFull {
-				h.Mu.Unlock()
-				h.respondError(w, "Lobby full", http.StatusServiceUnavailable)
-				return
-			}
-			if err != nil {
-				h.Mu.Unlock()
-				h.respondError(w, "Internal error", http.StatusInternalServerError)
-				slog.Error("Lobby token generation failed", "requestID", getRequestID(r), "error", err)
-				return
-			}
-		case "DELETE":
-			if err := l.CheckOut(token); err == errLobbyMemberTokenMismatch {
-				h.Mu.Unlock()
-				h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
-				return
-			}
-			if len(l.Members) == 0 {
-				delete(h.Lobbies, storageKey)
-				slog.Info("Lobby emptied")
-			}
-		}
-
-		snapshot := l.SnapshotFor(ip)
-		h.Mu.Unlock()
-
-		resp, err := json.Marshal(lobbyResponse{
-			Lobby:    snapshot,
-			Endpoint: Endpoint{IP: ip, Port: port},
-			Token:    memberToken,
-		})
-		if err != nil {
-			h.respondError(w, "Internal error", http.StatusInternalServerError)
-			slog.Error("JSON marshal error", "requestID", getRequestID(r), "error", err)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, err = w.Write(resp)
-		if err != nil {
-			slog.Error("Write error", "requestID", getRequestID(r), "error", err)
-			h.Metrics.recordError("Write error", http.StatusInternalServerError)
-		}
-		return
-	}
-
-	if len(info) != 4 {
-		h.respondError(w, "Missing parameters", http.StatusBadRequest)
-		return
-	}
-
-	queue := info[1]
-	ticket := info[2]
-	port, err := strconv.Atoi(info[3])
-	if err != nil || !validatePort(port) {
-		h.respondError(w, "Invalid port", http.StatusBadRequest)
-		return
-	}
-
-	slog.Info("Matchmaking request", "requestID", getRequestID(r), "method", r.Method, "version", version)
-	h.serveMatchmaking(w, r, ip, version, queue, ticket, port)
 }
 
 var handler = &lobbyHandler{
@@ -663,44 +498,88 @@ var handler = &lobbyHandler{
 const tickInterval = 5 * time.Minute
 const storeCompactionInterval = 24 * time.Hour
 
-// lobbyCheckInBody is the optional JSON payload accepted on lobby PUT requests.
-// All fields are optional so older clients (and the matchmaking flow that
-// reuses this endpoint shape) keep working with no body at all.
 type lobbyCheckInBody struct {
+	clientIdentity
+	Port           int        `json:"port"`
 	LocalIPs       []string   `json:"local_ips,omitempty"`
 	LocalEndpoints []Endpoint `json:"local_endpoints,omitempty"`
 }
 
-type lobbyCheckInData struct {
-	LocalIPs       []string
-	LocalEndpoints []Endpoint
-}
+func (h *lobbyHandler) serveLobby(w http.ResponseWriter, r *http.Request, ip, key string) {
+	if !validateLobbyKey(key) {
+		h.respondError(w, "Invalid lobby key", http.StatusBadRequest)
+		return
+	}
+	var request lobbyCheckInBody
+	if status := decodeStrictJSON(w, r, &request); status != 0 {
+		writeIngestError(w, status)
+		return
+	}
+	if !validateClientIdentity(w, h.Config, request.clientIdentity) {
+		return
+	}
+	if !validatePort(request.Port) {
+		h.respondError(w, "Invalid port", http.StatusBadRequest)
+		return
+	}
+	request.LocalIPs = sanitizeLocalIPs(request.LocalIPs)
+	request.LocalEndpoints = sanitizeLocalEndpoints(request.LocalEndpoints, request.LocalIPs)
+	token := bearerToken(r)
+	storageKey := lobbyStorageKey(request.CompatibilityID, key)
 
-// parseLobbyCheckInBody pulls the optional JSON body off a lobby PUT request,
-// returning the sanitized list of LAN candidate addresses (RFC 1918 / link-
-// local / loopback). Empty body is valid and yields a nil slice.
-func parseLobbyCheckInBody(r *http.Request) (lobbyCheckInData, error) {
-	if r.Body == nil {
-		return lobbyCheckInData{}, nil
-	}
-	if r.ContentLength == 0 {
-		return lobbyCheckInData{}, nil
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	var body lobbyCheckInBody
-	if err := decoder.Decode(&body); err != nil {
-		if err == io.EOF {
-			return lobbyCheckInData{}, nil
+	h.Mu.Lock()
+	lobby := h.Lobbies[storageKey]
+	if lobby == nil {
+		if r.Method == http.MethodDelete {
+			h.Mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+			return
 		}
-		return lobbyCheckInData{}, err
+		if len(h.Lobbies) >= maxLobbies {
+			h.Mu.Unlock()
+			h.respondError(w, "Server busy", http.StatusServiceUnavailable)
+			return
+		}
+		lobby = &Lobby{Key: key}
+		h.Lobbies[storageKey] = lobby
+		h.Metrics.recordLobbyCreated()
+	} else {
+		lobby.Clean(time.Now(), h.Config.Timeouts.LobbyMember.Duration())
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return lobbyCheckInData{}, errors.New("lobby request body contained trailing JSON")
+
+	if r.Method == http.MethodDelete {
+		if err := lobby.CheckOut(token); err != nil {
+			h.Mu.Unlock()
+			h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
+			return
+		}
+		if len(lobby.Members) == 0 {
+			delete(h.Lobbies, storageKey)
+		}
+		h.Mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
-	localIPs := sanitizeLocalIPs(body.LocalIPs)
-	return lobbyCheckInData{
-		LocalIPs:       localIPs,
-		LocalEndpoints: sanitizeLocalEndpoints(body.LocalEndpoints, localIPs),
-	}, nil
+
+	memberToken, err := lobby.CheckIn(ip, request.Port, token, request.LocalIPs, request.LocalEndpoints)
+	if err != nil {
+		h.Mu.Unlock()
+		switch err {
+		case errLobbyMemberTokenMismatch:
+			h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
+		case errLobbyFull:
+			h.respondError(w, "Lobby full", http.StatusServiceUnavailable)
+		default:
+			h.respondError(w, "Internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	response := lobbyResponse{
+		Lobby:    lobby.SnapshotFor(ip),
+		Endpoint: Endpoint{IP: ip, Port: request.Port},
+		Token:    memberToken,
+	}
+	h.Mu.Unlock()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(response)
 }

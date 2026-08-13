@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,10 +16,6 @@ const maxMatchmakingQueues = 10000
 const maxMatchmakingTagLeases = maxMatchmakingTickets
 const maxMatchmakingTagLeasesPerIP = 8
 const matchCodeQueuePrefix = "code."
-const antistaticMatchSelfTagHeader = "X-Antistatic-Match-Self-Tag"
-const antistaticMatchPeerTagHeader = "X-Antistatic-Match-Peer-Tag"
-const antistaticMatchSelfTagTokenHeader = "X-Antistatic-Match-Self-Tag-Token"
-const antistaticReportIDHeader = "X-Antistatic-Report-ID"
 
 // Long-poll bound for PUT requests that opt in via the ?wait= query
 // parameter. Clients use this to learn of a match without burning the
@@ -30,6 +25,7 @@ const maxMatchmakingLongPoll = 10 * time.Second
 type MatchmakingTicket struct {
 	ID             string              `json:"id"`
 	Version        string              `json:"version"`
+	ClientVersion  string              `json:"client_version"`
 	Queue          string              `json:"queue"`
 	Endpoints      []Endpoint          `json:"endpoints"`
 	Token          string              `json:"-"`
@@ -58,9 +54,9 @@ type MatchmakingTagLease struct {
 }
 
 type matchmakingTagPair struct {
-	Self      string
-	Peer      string
-	SelfToken string
+	Self      string `json:"self_tag"`
+	Peer      string `json:"peer_tag"`
+	SelfToken string `json:"self_tag_token,omitempty"`
 }
 
 // mergeEndpoint adds (or replaces in-family) a checked-in endpoint, capped
@@ -190,7 +186,7 @@ type matchmakingResponse struct {
 	Status    string                    `json:"status"`
 	Ticket    string                    `json:"ticket"`
 	Endpoints []Endpoint                `json:"endpoints"`
-	Token     string                    `json:"token,omitempty"`
+	Token     string                    `json:"token"`
 	TagToken  string                    `json:"tag_token,omitempty"`
 	Match     *matchmakingMatchResponse `json:"match,omitempty"`
 	Queue     *matchmakingQueueResponse `json:"queue,omitempty"`
@@ -198,9 +194,13 @@ type matchmakingResponse struct {
 }
 
 type matchmakingRequest struct {
+	clientIdentity
+	Queue          string              `json:"queue"`
+	Port           int                 `json:"port"`
 	Metadata       matchmakingMetadata `json:"metadata"`
 	LocalIPs       []string            `json:"local_ips,omitempty"`
 	LocalEndpoints []Endpoint          `json:"local_endpoints,omitempty"`
+	MatchCode      *matchmakingTagPair `json:"match_code,omitempty"`
 }
 
 // matchmakingMetadata is the deliberately small game-specific part of the
@@ -212,7 +212,10 @@ type matchmakingMetadata struct {
 }
 
 type gameReportRequest struct {
-	Event string `json:"event"`
+	clientIdentity
+	Queue     string              `json:"queue"`
+	MatchCode *matchmakingTagPair `json:"match_code,omitempty"`
+	Event     string              `json:"event"`
 }
 
 func validGameReportEvent(event string) bool {
@@ -293,23 +296,26 @@ func normalizeMatchmakingQueue(queue string) (string, bool) {
 	return canonicalMatchCodeQueue(tags.Self, tags.Peer), true
 }
 
-func parseMatchmakingTagHeaders(r *http.Request, queue string) (*matchmakingTagPair, bool) {
-	if !strings.HasPrefix(strings.ToLower(queue), matchCodeQueuePrefix) {
-		return nil, true
+func normalizeMatchmakingTags(tags *matchmakingTagPair, queue string) (*matchmakingTagPair, string, bool) {
+	if tags == nil {
+		if strings.HasPrefix(strings.ToLower(queue), matchCodeQueuePrefix) || !validateMatchmakingQueue(queue) {
+			return nil, "", false
+		}
+		return nil, queue, true
 	}
-	self := normalizeMatchmakingTag(r.Header.Get(antistaticMatchSelfTagHeader))
-	peer := normalizeMatchmakingTag(r.Header.Get(antistaticMatchPeerTagHeader))
+	if queue != "code" {
+		return nil, "", false
+	}
+	self := normalizeMatchmakingTag(tags.Self)
+	peer := normalizeMatchmakingTag(tags.Peer)
 	if !validateMatchmakingTag(self) || !validateMatchmakingTag(peer) || self == peer {
-		return nil, false
-	}
-	if canonicalMatchCodeQueue(self, peer) != strings.ToLower(queue) {
-		return nil, false
+		return nil, "", false
 	}
 	return &matchmakingTagPair{
 		Self:      self,
 		Peer:      peer,
-		SelfToken: strings.TrimSpace(r.Header.Get(antistaticMatchSelfTagTokenHeader)),
-	}, true
+		SelfToken: strings.TrimSpace(tags.SelfToken),
+	}, canonicalMatchCodeQueue(self, peer), true
 }
 
 func matchmakingMatchID(version, queue string, first, second MatchParticipant) string {
@@ -575,7 +581,7 @@ func (h *lobbyHandler) refreshMatchmakingTagLeaseLocked(ticket *MatchmakingTicke
 	return status
 }
 
-func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, queue, ip string, port int, metadata matchmakingMetadata, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, now time.Time) (*matchmakingResponse, int) {
+func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, clientVersion, queue, ip string, port int, metadata matchmakingMetadata, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	h.cleanupMatchmakingLocked(now)
 	key := matchmakingTicketKey(version, queue, ticketID)
@@ -603,6 +609,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		}
 
 		existing.mergeEndpoint(ip, port)
+		existing.ClientVersion = clientVersion
 		existing.LocalIPs = localIPs
 		existing.LocalEndpoints = localEndpoints
 		if existing.MatchedID == "" {
@@ -656,6 +663,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	ticket := &MatchmakingTicket{
 		ID:             ticketID,
 		Version:        version,
+		ClientVersion:  clientVersion,
 		Queue:          queue,
 		Endpoints:      []Endpoint{{IP: ip, Port: port}},
 		Token:          ticketToken,
@@ -1003,47 +1011,27 @@ func (h *lobbyHandler) waitForMatchmakingResult(
 // serveGameReport accepts only a small, authenticated vocabulary of client
 // game failures. The event code is aggregated in memory by hour; the ticket,
 // address, character, queue, and any client-supplied message are discarded.
-func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, version, queue, ticketID string, port int) {
-	if !validateVersion(version) {
-		h.respondError(w, "Invalid version", http.StatusBadRequest)
-		return
-	}
-	if !validateMatchmakingQueue(queue) {
-		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
-		return
-	}
-	queue, ok := normalizeMatchmakingQueue(queue)
-	if !ok {
-		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
-		return
-	}
+func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, ticketID string) {
 	if !validateMatchmakingTicket(ticketID) {
 		h.respondError(w, "Invalid matchmaking ticket", http.StatusBadRequest)
 		return
 	}
-	if !validatePort(port) {
-		h.respondError(w, "Invalid port", http.StatusBadRequest)
-		return
-	}
-
-	if r.Body == nil {
-		h.respondError(w, "Invalid game report", http.StatusBadRequest)
-		return
-	}
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
 	var report gameReportRequest
-	if err := decoder.Decode(&report); err != nil {
-		h.respondError(w, "Invalid game report", http.StatusBadRequest)
+	if status := decodeStrictJSON(w, r, &report); status != 0 {
+		writeIngestError(w, status)
 		return
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF || !validGameReportEvent(report.Event) {
+	if !validateClientIdentity(w, h.Config, report.clientIdentity) {
+		return
+	}
+	_, queue, ok := normalizeMatchmakingTags(report.MatchCode, report.Queue)
+	if !ok || !validGameReportEvent(report.Event) {
 		h.respondError(w, "Invalid game report", http.StatusBadRequest)
 		return
 	}
 
-	token := r.Header.Get(antistaticTokenHeader)
-	key := matchmakingTicketKey(version, queue, ticketID)
+	token := bearerToken(r)
+	key := matchmakingTicketKey(report.CompatibilityID, queue, ticketID)
 	h.Mu.Lock()
 	h.cleanupMatchmakingLocked(time.Now())
 	t := h.Tickets[key]
@@ -1067,11 +1055,11 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, v
 	if t.reportedEvents&bit != 0 {
 		reportID := t.reportIDs[eventIndex]
 		h.Mu.Unlock()
-		w.Header().Set(antistaticReportIDHeader, reportID)
 		if h.Store != nil {
-			h.Store.enqueueNetplay(reportID, version, report.Event)
+			h.Store.enqueueNetplay(reportID, report.ClientVersion, report.Event)
 		}
-		w.WriteHeader(http.StatusNoContent)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(reportResponse{ReportID: reportID})
 		return
 	}
 	reportID := "nr-" + generateRequestID()
@@ -1080,61 +1068,38 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, v
 	h.recordMatchmakingOutcomeLocked(t, report.Event, time.Now())
 	h.Mu.Unlock()
 
-	w.Header().Set(antistaticReportIDHeader, reportID)
 	if h.Store != nil {
-		h.Store.enqueueNetplay(reportID, version, report.Event)
+		h.Store.enqueueNetplay(reportID, report.ClientVersion, report.Event)
 	}
 	if report.Event != "match_connected" {
 		h.Metrics.recordGameErrorWithReportID(report.Event, reportID)
 	}
-	w.WriteHeader(http.StatusNoContent)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(reportResponse{ReportID: reportID})
 }
 
-func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, ip, version, queue, ticket string, port int) {
-	if !validateVersion(version) {
-		h.respondError(w, "Invalid version", http.StatusBadRequest)
-		return
-	}
-	if !validateMatchmakingQueue(queue) {
-		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
-		return
-	}
-	normalizedQueue, ok := normalizeMatchmakingQueue(queue)
-	if !ok {
-		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
-		return
-	}
-	queue = normalizedQueue
+func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, ip, ticket string) {
 	if !validateMatchmakingTicket(ticket) {
 		h.respondError(w, "Invalid matchmaking ticket", http.StatusBadRequest)
 		return
 	}
-	if !validatePort(port) {
-		h.respondError(w, "Invalid port", http.StatusBadRequest)
-		return
-	}
 
 	var request matchmakingRequest
-	var tags *matchmakingTagPair
+	if status := decodeStrictJSON(w, r, &request); status != 0 {
+		writeIngestError(w, status)
+		return
+	}
+	if !validateClientIdentity(w, h.Config, request.clientIdentity) {
+		return
+	}
+	tags, queue, ok := normalizeMatchmakingTags(request.MatchCode, request.Queue)
+	if !ok {
+		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
+		return
+	}
 	if r.Method == http.MethodPut {
-		var ok bool
-		tags, ok = parseMatchmakingTagHeaders(r, queue)
-		if !ok {
-			h.respondError(w, "Invalid matchmaking tag headers", http.StatusBadRequest)
-			return
-		}
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil {
+		if !validatePort(request.Port) || !validateMatchmakingCharacter(request.Metadata.Character) {
 			h.respondError(w, "Invalid matchmaking request", http.StatusBadRequest)
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			h.respondError(w, "Invalid matchmaking request", http.StatusBadRequest)
-			return
-		}
-		if !validateMatchmakingCharacter(request.Metadata.Character) {
-			h.respondError(w, "Invalid matchmaking metadata", http.StatusBadRequest)
 			return
 		}
 		request.LocalIPs = sanitizeLocalIPs(request.LocalIPs)
@@ -1142,17 +1107,16 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 
 	now := time.Now()
-	token := r.Header.Get(antistaticTokenHeader)
+	token := bearerToken(r)
+	version := request.CompatibilityID
 
 	h.Mu.Lock()
 	var resp *matchmakingResponse
 	status := http.StatusOK
 
 	switch r.Method {
-	case http.MethodGet:
-		resp, status = h.matchmakingStateLocked(version, queue, ticket, token, now)
 	case http.MethodPut:
-		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, queue, ip, port, request.Metadata, token, tags, request.LocalIPs, request.LocalEndpoints, now)
+		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, request.ClientVersion, queue, ip, request.Port, request.Metadata, token, tags, request.LocalIPs, request.LocalEndpoints, now)
 	case http.MethodDelete:
 		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token)
 	default:

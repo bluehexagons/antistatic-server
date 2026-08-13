@@ -1,13 +1,28 @@
-/** Exact JSON wire types for antistatic-server v0.11. */
+/** Exact JSON wire types for antistatic-server API v1. */
+
+export type ClientIdentity = {
+  client_version: string;
+  compatibility_id: string;
+};
+
+export type APIErrorResponse = {
+  error: string;
+  expected_compatibility_id?: string;
+};
 
 export type Endpoint = {
   ip: string;
   port: number;
 };
 
-export type LobbyCheckInRequest = {
+export type LobbyCheckInRequest = ClientIdentity & {
+  port: number;
   local_ips?: string[];
   local_endpoints?: Endpoint[];
+};
+
+export type LobbyLeaveRequest = ClientIdentity & {
+  port: number;
 };
 
 export type LobbyMember = {
@@ -19,13 +34,12 @@ export type LobbyMember = {
 export type Lobby = {
   key: string;
   members: LobbyMember[];
-  version: string;
 };
 
 export type LobbyResponse = {
   lobby: Lobby;
   endpoint: Endpoint;
-  token?: string;
+  token: string;
 };
 
 export type CommunityQueueEvent = {
@@ -51,10 +65,25 @@ export type AntistaticMatchmakingMetadata = MatchmakingMetadata & {
   character: string;
 };
 
-export type MatchmakingRequest<Metadata extends MatchmakingMetadata = AntistaticMatchmakingMetadata> =
-  LobbyCheckInRequest & {
-    metadata: Metadata;
-  };
+export type MatchCodeClaim = {
+  self_tag: string;
+  peer_tag: string;
+  self_tag_token?: string;
+};
+
+export type MatchmakingRequest<Metadata extends MatchmakingMetadata = AntistaticMatchmakingMetadata> = ClientIdentity & {
+  queue: string;
+  port: number;
+  metadata: Metadata;
+  local_ips?: string[];
+  local_endpoints?: Endpoint[];
+  match_code?: MatchCodeClaim;
+};
+
+export type MatchmakingCancelRequest = ClientIdentity & {
+  queue: string;
+  match_code?: MatchCodeClaim;
+};
 
 export type MatchmakingPeer<Metadata extends MatchmakingMetadata = AntistaticMatchmakingMetadata> = LobbyMember & {
   metadata: Metadata;
@@ -86,7 +115,7 @@ export type MatchmakingQueue = {
 type MatchmakingResponseBase = {
   ticket: string;
   endpoints: Endpoint[];
-  token?: string;
+  token: string;
   tag_token?: string;
   queue?: MatchmakingQueue;
   events?: CommunityQueueEvent[];
@@ -123,7 +152,9 @@ export type MatchmakingOutcome =
   | 'match_rollback_refused'
   | 'match_peer_timeout';
 
-export type MatchmakingOutcomeRequest = {
+export type MatchmakingOutcomeRequest = ClientIdentity & {
+  queue: string;
+  match_code?: MatchCodeClaim;
   event: MatchmakingOutcome;
 };
 
@@ -133,9 +164,8 @@ export type ReportResponse = {
 
 export type Platform = 'windows' | 'linux' | 'macos' | 'steamdeck' | 'unknown';
 
-export type CrashReportRequest = {
+export type CrashReportRequest = ClientIdentity & {
   event_id: string;
-  app_version: string;
   platform: Platform;
   arch: string;
   reason_code: string;
@@ -144,7 +174,7 @@ export type CrashReportRequest = {
 
 export type FeedbackCategory = 'bug' | 'feedback' | 'other';
 
-export type FeedbackRequest = {
+export type FeedbackRequest = ClientIdentity & {
   event_id: string;
   category: FeedbackCategory;
   subject: string;
@@ -154,7 +184,7 @@ export type FeedbackRequest = {
 
 export type GameplayResult = 'win' | 'loss' | 'draw' | 'unknown' | 'quit';
 
-export type GameplayMetricRequest = {
+export type GameplayMetricRequest = ClientIdentity & {
   event_id: string;
   mode: string;
   stage: string;
@@ -193,7 +223,7 @@ export type MemoryGiBBucket = 'under-4' | '4-7' | '8-15' | '16-31' | '32-63' | '
 export type CPUCoresBucket = '1-2' | '3-4' | '5-8' | '9-16' | '17-plus' | 'unknown';
 export type ResolutionBucket = '720p-or-less' | '1080p' | '1440p' | '2160p-or-more' | 'other' | 'unknown';
 
-export type PerformanceMetricRequest = {
+export type PerformanceMetricRequest = ClientIdentity & {
   event_id: string;
   platform: Platform;
   arch: string;
@@ -245,7 +275,6 @@ export type HealthResponse = {
   tag_lease_count: number;
   lobbies_created: number;
   successful_matches: number;
-  match_created_count: number;
   queue_attempt_count: number;
   match_connection_success_count: number;
   match_connection_failure_count: number;
@@ -253,8 +282,6 @@ export type HealthResponse = {
   queue_expiration_count: number;
   http_error_count: number;
   game_error_count: number;
-  client_error_count: number;
-  server_error_count: number;
   http_errors?: RecentHTTPError[];
   game_errors?: RecentGameError[];
   activity: ActivitySummary;

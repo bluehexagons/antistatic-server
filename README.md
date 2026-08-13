@@ -36,9 +36,10 @@ prefilled starting point for forks:
 antistatic-server -config config/antistatic.json -port 8080
 ```
 
-The profile controls the service name shown by the health and admin pages,
-recurring queue events, report/metric route switches, and lobby and
-matchmaking lifetimes. Property names use `lower_snake_case`. Durations use Go
+The profile controls the service name shown by the health and admin pages, the
+exact `compatibility_id` admitted by the API, recurring queue events,
+report/metric route switches, and lobby and matchmaking lifetimes. Property
+names use `lower_snake_case`. Durations use Go
 duration strings such as `30s`, `2m`, and `1h`. An omitted property keeps the
 Antistatic default; an explicit empty `events` array removes every event.
 
@@ -168,26 +169,23 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 | `GET` | `/health` | JSON health check with live counts, split HTTP/game error logs, and aggregate activity |
 | `GET` | `/health.html` | Human-readable HTML health view with the same data |
 | `GET` | `/events` | Upcoming recurring community queue events |
-| `PUT` | `/{version}/lobby/{key}/{port}` | Register/update a lobby member |
-| `DELETE` | `/{version}/lobby/{key}/{port}` | Remove a lobby member |
-| `GET` | `/lobby/{key}/{port}` | Legacy endpoint (no version) |
-| `PUT` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Register or refresh a matchmaking ticket |
-| `GET` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Poll matchmaking ticket status |
-| `DELETE` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Cancel a matchmaking ticket |
-| `POST` | `/{version}/matchmaking/{queue}/{ticket}/{port}/report` | Submit an authenticated coarse game-failure report |
-| `POST` | `/{version}/reports/crash` | Submit a v1 crash report |
-| `POST` | `/{version}/reports/feedback` | Submit v1 feedback |
-| `POST` | `/{version}/metrics/gameplay` | Submit a v1 coarse gameplay sample |
-| `POST` | `/{version}/metrics/performance` | Submit a v1 coarse performance sample |
+| `PUT` | `/api/v1/lobbies/{key}` | Register/update a lobby member |
+| `DELETE` | `/api/v1/lobbies/{key}` | Remove a lobby member |
+| `PUT` | `/api/v1/matchmaking/{ticket}` | Register, refresh, or long-poll a matchmaking ticket |
+| `DELETE` | `/api/v1/matchmaking/{ticket}` | Cancel a matchmaking ticket |
+| `POST` | `/api/v1/matchmaking/{ticket}/outcome` | Submit an authenticated coarse game outcome |
+| `POST` | `/api/v1/reports/crash` | Submit a crash report |
+| `POST` | `/api/v1/reports/feedback` | Submit feedback |
+| `POST` | `/api/v1/metrics/gameplay` | Submit a coarse gameplay sample |
+| `POST` | `/api/v1/metrics/performance` | Submit a coarse performance sample |
 
 ### Report collection API
 
 Report collection requires `Content-Type: application/json`, rejects unknown
 fields and trailing JSON, and uses the global 10 KiB request limit. In the
-current v1 schema, `{version}` identifies the sending client's current API/game
-compatibility. Feedback and metric records store that URL version. Crash
-records instead store their required `app_version` field because a crash may
-have been queued before the client upgraded and submitted it.
+current v1 schema, every body carries `client_version` for diagnostics and
+`compatibility_id` for exact admission. A mismatch returns `426` with the
+server's expected identifier. All records store `client_version`.
 Report endpoints require HTTPS for non-loopback clients and allow at most 20
 requests initially, refilling at 10 requests per minute per client IP and
 report path. They do not enable CORS; desktop clients send requests directly.
@@ -201,8 +199,9 @@ Crash reports accept:
 
 ```json
 {
+  "client_version": "0.10.8",
+  "compatibility_id": "antistatic-v1",
   "event_id": "random-retry-id-0001",
-  "app_version": "0.9.5",
   "platform": "linux",
   "arch": "amd64",
   "reason_code": "segfault",
@@ -210,18 +209,19 @@ Crash reports accept:
 }
 ```
 
-`app_version` is required and uses the same bounded version format as the URL.
-It identifies the version that generated the crash, which may differ from the
-submitting client's URL version. `platform` is `windows`, `linux`, `macos`,
+`client_version` uses the bounded application-version format. `platform` is
+`windows`, `linux`, `macos`,
 `steamdeck`, or `unknown`. `arch` and `reason_code` are bounded identifiers. `symbols` is required, has at most
 48 entries of at most 120 identifier-like characters each, and rejects paths.
-The response is `201` with `{"report_id":"cr-..."}` and the same value in
-`X-Antistatic-Report-ID`. A duplicate event ID returns the original ID.
+The response is `201` with `{"report_id":"cr-..."}`. A duplicate event ID
+returns the original ID.
 
 Feedback accepts:
 
 ```json
 {
+  "client_version": "0.10.8",
+  "compatibility_id": "antistatic-v1",
   "event_id": "random-retry-id-0002",
   "category": "bug",
   "subject": "Short summary",
@@ -327,7 +327,10 @@ server or filesystem/volume snapshot gives a fully consistent set. Preserve
 0700 directory and 0600 file permissions after restore. Backups contain user
 feedback and should be encrypted and access-controlled.
 
-Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header. The first successful `PUT` for a lobby member or matchmaking ticket returns a `token`; clients must send that token in `X-Antistatic-Token` when refreshing, polling, deleting, or reporting on the same member/ticket. Tokens are bearer credentials and should not be logged or shared.
+Lobby and matchmaking ownership uses `Authorization: Bearer <token>`. The
+first successful `PUT` returns a `token`; clients send it when refreshing,
+deleting, or reporting on the same member or ticket. Tokens should not be
+logged or shared.
 
 ### Health Endpoint Response
 ```json
@@ -340,7 +343,6 @@ Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header
   "tag_lease_count": 1,
   "lobbies_created": 12,
   "successful_matches": 8,
-  "match_created_count": 8,
   "queue_attempt_count": 23,
   "match_connection_success_count": 6,
   "match_connection_failure_count": 2,
@@ -383,7 +385,7 @@ connection-failure counter.
 The counters are in-memory and reset on restart; they are intended as a rough
 guide for when queueing is likely to be quieter, not as a player census.
 
-`match_created_count` counts pairs formed by the server. The connection success
+`successful_matches` counts pairs formed by the server. The connection success
 and failure counters come from the client report contract below; a match with
 no report is intentionally left as unreported rather than guessed as a
 failure. Queue cancellations and expirations count tickets that were canceled
@@ -402,6 +404,9 @@ response.
 ### Lobby Check-In PUT Body
 ```json
 {
+  "client_version": "0.10.8",
+  "compatibility_id": "antistatic-v1",
+  "port": 45860,
   "local_ips": ["192.168.1.20", "10.0.0.20"],
   "local_endpoints": [
     {"ip": "192.168.1.20", "port": 45860}
@@ -423,8 +428,7 @@ response.
         ],
         "local_ips": ["192.168.1.20"]
       }
-    ],
-    "version": "0.9.5"
+    ]
   },
   "endpoint": {
     "ip": "198.51.100.10",
@@ -437,6 +441,10 @@ response.
 ### Matchmaking PUT Body
 ```json
 {
+  "client_version": "0.10.8",
+  "compatibility_id": "antistatic-v1",
+  "queue": "default",
+  "port": 45860,
   "metadata": {
     "character": "Carbon"
   },
@@ -455,18 +463,24 @@ visibility rules as lobby check-ins. They let same-NAT or same-host clients try
 LAN/loopback tunnel candidates without exposing local addresses to unrelated
 WAN peers.
 
-For Match by Code queues (`code.<tag>-<tag>`), clients also send:
+For Match by Code, set `queue` to `code` and include a JSON claim:
 
-| Header | Description |
-|--------|-------------|
-| `X-Antistatic-Match-Self-Tag` | The caller's normalized uppercase code |
-| `X-Antistatic-Match-Peer-Tag` | The peer code the caller is searching for |
-| `X-Antistatic-Match-Self-Tag-Token` | Optional owner token from an earlier `tag_token` response |
+```json
+"match_code": {
+  "self_tag": "ALPHA1",
+  "peer_tag": "BRAVO2",
+  "self_tag_token": "optional-returned-lease-token"
+}
+```
 
-The server validates that those two tags derive the requested `code.*` queue, leases the self tag to one owner token for 1 hour, returns that owner token as `tag_token`, and only matches reciprocal claims (`A -> B` with `B -> A`). Code queue matching is case-insensitive; the canonical stored queue uses lowercase tags. A client refreshes the lease by sending the returned owner token when it searches again. To limit abuse, a single client IP can hold at most 8 active match-code leases at a time.
+The server leases the self tag to one owner token for 1 hour, returns that
+token as `tag_token`, and only matches reciprocal claims (`A -> B` with
+`B -> A`). Matching is case-insensitive. A single client IP can hold at most
+8 active match-code leases.
 
 ### Matchmaking Queue Measurements
-Waiting, matched, and canceled matchmaking responses include aggregate `queue` measurements for the same game version and queue:
+Waiting, matched, and canceled matchmaking responses include aggregate `queue`
+measurements for the same compatibility identity and queue:
 
 ```json
 {
@@ -500,22 +514,21 @@ A matchmaking `PUT` may include `?wait=N` to wait up to `N` seconds for a match 
 After a matchmaking ticket has been matched, the client may report a game
 failure with an authenticated `POST`:
 
-`POST /{version}/matchmaking/{queue}/{ticket}/{port}/report`
+`POST /api/v1/matchmaking/{ticket}/outcome`
 
-The request must include the ticket's `X-Antistatic-Token` and one strict JSON
-event code. The server keeps only the fixed event code in its bounded recent
-log and aggregate counter:
+The request must include the ticket bearer token, client identity, queue (and
+match-code claim when applicable), and one strict JSON event code. The server
+keeps only the fixed event code in its bounded recent log and aggregate counter:
 
 ```json
-{"event":"match_connect_failed"}
+{"client_version":"0.10.8","compatibility_id":"antistatic-v1","queue":"default","event":"match_connect_failed"}
 ```
 
 Supported event codes are `match_connected`, `match_connect_failed`,
 `match_handshake_failed`, `match_runtime_error`, `match_sim_desync`,
 `match_rollback_refused`, and `match_peer_timeout`. Reports are authenticated
-and idempotent per event and ticket. A successful response includes a stable
-`X-Antistatic-Report-ID`; clients can show that anonymous ID to the player for
-inclusion in a bug report.
+and idempotent per event and ticket. A successful response is
+`{"report_id":"nr-..."}`; clients can show that anonymous ID to the player.
 
 The peer-introduction match and its addresses are discarded after two minutes.
 The server retains a scrubbed ticket containing only routing/lifecycle fields,

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,52 @@ func serveMatchmakingRequestWithToken(h *lobbyHandler, method, target, remoteAdd
 }
 
 func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, remoteAddr string, body any, token, selfTag, peerTag, tagToken string) *httptest.ResponseRecorder {
+	rawTarget, query, _ := strings.Cut(target, "?")
+	parts := strings.Split(strings.Trim(rawTarget, "/"), "/")
+	if len(parts) < 5 || parts[1] != "matchmaking" {
+		panic("invalid matchmaking test target: " + target)
+	}
+	queue, ticket := parts[2], parts[3]
+	port, _ := strconv.Atoi(parts[4])
+	isReport := len(parts) == 6 && parts[5] == "report"
+	target = apiPrefix + "/matchmaking/" + ticket
+	if isReport {
+		target += "/outcome"
+	}
+	if query != "" {
+		target += "?" + query
+	}
+	identity := clientIdentity{ClientVersion: parts[0], CompatibilityID: h.Config.Service.CompatibilityID}
+	tags := (*matchmakingTagPair)(nil)
+	if selfTag != "" || peerTag != "" {
+		tags = &matchmakingTagPair{Self: selfTag, Peer: peerTag, SelfToken: tagToken}
+		queue = "code"
+	} else if method != http.MethodPut {
+		if parsed, ok := parseMatchCodeQueue(queue); ok {
+			tags = &parsed
+			queue = "code"
+		}
+	}
+	switch request := body.(type) {
+	case matchmakingRequest:
+		request.clientIdentity = identity
+		request.Queue = queue
+		request.Port = port
+		request.MatchCode = tags
+		body = request
+	case gameReportRequest:
+		request.clientIdentity = identity
+		request.Queue = queue
+		request.MatchCode = tags
+		body = request
+	case nil:
+		body = matchmakingRequest{
+			clientIdentity: identity,
+			Queue:          queue,
+			Port:           port,
+			MatchCode:      tags,
+		}
+	}
 	var reader *bytes.Reader
 	if body != nil {
 		data, ok := body.(json.RawMessage)
@@ -40,23 +87,24 @@ func serveMatchmakingRequestWithTokenAndTags(h *lobbyHandler, method, target, re
 
 	req := httptest.NewRequest(method, target, reader)
 	req.RemoteAddr = remoteAddr
+	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
-		req.Header.Set(antistaticTokenHeader, token)
-	}
-	if selfTag != "" {
-		req.Header.Set(antistaticMatchSelfTagHeader, selfTag)
-	}
-	if peerTag != "" {
-		req.Header.Set(antistaticMatchPeerTagHeader, peerTag)
-	}
-	if tagToken != "" {
-		req.Header.Set(antistaticMatchSelfTagTokenHeader, tagToken)
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
 
 	return rec
+}
+
+func decodeReportID(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var response reportResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unable to decode report response: %v; body=%q", err, rec.Body.String())
+	}
+	return response.ReportID
 }
 
 func decodeMatchmakingResponse(t *testing.T, rec *httptest.ResponseRecorder) matchmakingResponse {
@@ -110,13 +158,13 @@ func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
 
 	target := "/0.9.5/matchmaking/default/TicketA/45860/report"
 	rec := serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connect_failed"}, firstResponse.Token)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("game report status = %d, want %d: %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("game report status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	if got := h.Metrics.gameErrors.Load(); got != 1 {
 		t.Fatalf("game error count = %d, want one report", got)
 	}
-	failureReportID := rec.Header().Get(antistaticReportIDHeader)
+	failureReportID := decodeReportID(t, rec)
 	if failureReportID == "" {
 		t.Fatal("game report should return a report ID")
 	}
@@ -126,29 +174,29 @@ func TestMatchmakingClientGameReportIsAuthenticatedAndAggregated(t *testing.T) {
 	}
 
 	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connected"}, firstResponse.Token)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("successful game report status = %d, want %d", rec.Code, http.StatusNoContent)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("successful game report status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	if got := h.Metrics.matchSuccesses.Load(); got != 1 {
 		t.Fatalf("match connection success count = %d, want one report", got)
 	}
 
 	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connected"}, firstResponse.Token)
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("duplicate game report status = %d, want %d", rec.Code, http.StatusNoContent)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("duplicate game report status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	connectedReportID := rec.Header().Get(antistaticReportIDHeader)
+	connectedReportID := decodeReportID(t, rec)
 	if connectedReportID == "" {
 		t.Fatal("duplicate game report should return its original report ID")
 	}
 	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connected"}, firstResponse.Token)
-	if got := rec.Header().Get(antistaticReportIDHeader); got != connectedReportID {
+	if got := decodeReportID(t, rec); got != connectedReportID {
 		t.Fatalf("duplicate report ID = %q, want stable %q", got, connectedReportID)
 	}
 
 	rec = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_sim_desync"}, firstResponse.Token)
-	if rec.Code != http.StatusNoContent || rec.Header().Get(antistaticReportIDHeader) == "" {
-		t.Fatalf("sim-desync report status/header = %d/%q, want 204/report ID", rec.Code, rec.Header().Get(antistaticReportIDHeader))
+	if rec.Code != http.StatusOK || decodeReportID(t, rec) == "" {
+		t.Fatalf("sim-desync report status/body = %d/%q, want 200/report ID", rec.Code, rec.Body.String())
 	}
 	h.Mu.RLock()
 	stats := h.Queues[matchmakingQueueKey("0.9.5", "default")]
@@ -202,7 +250,7 @@ func TestNetplayReportPersistenceAndFailureIsolation(t *testing.T) {
 	}
 	store.mu.Unlock()
 	recorder := serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_connect_failed"}, firstResponse.Token)
-	if recorder.Code != http.StatusNoContent {
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("persisted netplay report status = %d", recorder.Code)
 	}
 	select {
@@ -219,7 +267,7 @@ func TestNetplayReportPersistenceAndFailureIsolation(t *testing.T) {
 	store.openAppend = openNormally
 	store.mu.Unlock()
 	records, err := store.netplay()
-	if err != nil || records[0].ID != recorder.Header().Get(antistaticReportIDHeader) || records[0].AppVersion != "0.9.5" || records[0].Event != "match_connect_failed" {
+	if err != nil || records[0].ID != decodeReportID(t, recorder) || records[0].AppVersion != "0.9.5" || records[0].Event != "match_connect_failed" {
 		t.Fatalf("persisted netplay records = %#v, %v", records, err)
 	}
 
@@ -235,10 +283,10 @@ func TestNetplayReportPersistenceAndFailureIsolation(t *testing.T) {
 	}
 	store.mu.Unlock()
 	recorder = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
-	if recorder.Code != http.StatusNoContent || recorder.Header().Get(antistaticReportIDHeader) == "" {
-		t.Fatalf("storage failure changed report response = %d / %q", recorder.Code, recorder.Header().Get(antistaticReportIDHeader))
+	if recorder.Code != http.StatusOK || decodeReportID(t, recorder) == "" {
+		t.Fatalf("storage failure changed report response = %d / %q", recorder.Code, recorder.Body.String())
 	}
-	runtimeReportID := recorder.Header().Get(antistaticReportIDHeader)
+	runtimeReportID := decodeReportID(t, recorder)
 	waitForTestCondition(t, func() bool {
 		store.netplayMu.Lock()
 		defer store.netplayMu.Unlock()
@@ -257,15 +305,15 @@ func TestNetplayReportPersistenceAndFailureIsolation(t *testing.T) {
 	store.openAppend = openNormally
 	store.mu.Unlock()
 	recorder = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
-	if recorder.Code != http.StatusNoContent || recorder.Header().Get(antistaticReportIDHeader) != runtimeReportID {
-		t.Fatalf("duplicate retry response = %d / %q, want stable %q", recorder.Code, recorder.Header().Get(antistaticReportIDHeader), runtimeReportID)
+	if recorder.Code != http.StatusOK || decodeReportID(t, recorder) != runtimeReportID {
+		t.Fatalf("duplicate retry response = %d / %q, want stable %q", recorder.Code, recorder.Body.String(), runtimeReportID)
 	}
 	waitForTestCondition(t, func() bool {
 		records, err := store.netplay()
 		return err == nil && len(records) == 2
 	})
 	recorder = serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
-	if recorder.Code != http.StatusNoContent {
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("persisted duplicate status = %d", recorder.Code)
 	}
 	records, err = store.netplay()
@@ -315,18 +363,18 @@ func TestMatchedTicketsAreScrubbedAndRetainedForRuntimeReports(t *testing.T) {
 	h.Mu.Unlock()
 
 	target := "/0.9.5/matchmaking/default/TicketA/45860/report"
-	state := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, firstResponse.Token)
+	state := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, firstResponse.Token)
 	if state.Code != http.StatusOK || decodeMatchmakingResponse(t, state).Status != "canceled" {
 		t.Fatalf("retained ticket poll = %d/%s, want canceled", state.Code, state.Body.String())
 	}
 	rec := serveMatchmakingRequestWithToken(h, http.MethodPost, target, "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
-	if rec.Code != http.StatusNoContent || rec.Header().Get(antistaticReportIDHeader) == "" {
-		t.Fatalf("retained runtime report status/header = %d/%q", rec.Code, rec.Header().Get(antistaticReportIDHeader))
+	if rec.Code != http.StatusOK || decodeReportID(t, rec) == "" {
+		t.Fatalf("retained runtime report status/body = %d/%q", rec.Code, rec.Body.String())
 	}
 	h.Mu.Lock()
 	h.Tickets[matchmakingTicketKey("0.9.5", "default", "TicketA")].CheckedIn = now.Add(-defaultMatchmakingReportRetention - time.Second)
 	h.Mu.Unlock()
-	expired := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, firstResponse.Token)
+	expired := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, firstResponse.Token)
 	if expired.Code != http.StatusNotFound {
 		t.Fatalf("expired report poll returned %d, want %d", expired.Code, http.StatusNotFound)
 	}
@@ -418,7 +466,7 @@ func TestMatchmakingWaitingResponseIncludesQueueWaits(t *testing.T) {
 	ticket.CreatedAt = time.Now().Add(-12 * time.Second)
 	h.Mu.Unlock()
 
-	rec := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, token)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET returned status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -591,7 +639,7 @@ func TestMatchmakingMatchesCompatibleTicketsFIFO(t *testing.T) {
 	}
 }
 
-func TestMatchmakingCodeQueueRequiresValidTagHeaders(t *testing.T) {
+func TestMatchmakingCodeQueueRequiresValidJSONClaim(t *testing.T) {
 	h := newTestLobbyHandler()
 	body := matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}
 
@@ -611,8 +659,8 @@ func TestMatchmakingCodeQueueRequiresValidTagHeaders(t *testing.T) {
 		"BRAVO2",
 		"",
 	)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("mismatched tag headers returned %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("JSON match-code claim returned %d, want %d", rec.Code, http.StatusOK)
 	}
 
 	rec = serveMatchmakingRequestWithTokenAndTags(
@@ -1309,12 +1357,12 @@ func TestMatchmakingDeleteMatchedTicketRetainsPeerReportState(t *testing.T) {
 	if peer == nil || matchCount != 0 {
 		t.Fatalf("matched DELETE left peer/matches = %v/%d, want retained peer and no match", peer != nil, matchCount)
 	}
-	state := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, firstResponse.Token)
+	state := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, firstResponse.Token)
 	if state.Code != http.StatusOK || decodeMatchmakingResponse(t, state).Status != "canceled" {
 		t.Fatalf("peer state after matched DELETE = %d/%s, want canceled", state.Code, state.Body.String())
 	}
 	report := serveMatchmakingRequestWithToken(h, http.MethodPost, "/0.9.5/matchmaking/default/TicketA/45860/report", "198.51.100.10:32000", gameReportRequest{Event: "match_runtime_error"}, firstResponse.Token)
-	if report.Code != http.StatusNoContent {
+	if report.Code != http.StatusOK {
 		t.Fatalf("peer report after matched DELETE returned %d", report.Code)
 	}
 }
@@ -1340,12 +1388,12 @@ func TestMatchmakingStateRejectsWrongToken(t *testing.T) {
 	first := serveMatchmakingRequest(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}})
 	token := decodeMatchmakingResponse(t, first).Token
 
-	rec := serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, "wrong-token")
+	rec := serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, "wrong-token")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("GET with wrong token returned %d, want %d", rec.Code, http.StatusForbidden)
 	}
 
-	rec = serveMatchmakingRequestWithToken(h, http.MethodGet, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", nil, token)
+	rec = serveMatchmakingRequestWithToken(h, http.MethodPut, "/0.9.5/matchmaking/default/TicketA/45860", "198.51.100.10:32000", matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, token)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET with correct token returned %d, want %d", rec.Code, http.StatusOK)
 	}

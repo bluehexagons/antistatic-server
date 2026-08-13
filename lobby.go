@@ -10,13 +10,11 @@ type Lobby struct {
 	Key     string       `json:"key"`
 	Mu      sync.RWMutex `json:"-"`
 	Members []*Member    `json:"members"`
-	Version string       `json:"version"`
 }
 
 type LobbySnapshot struct {
 	Key     string       `json:"key"`
 	Members []MemberView `json:"members"`
-	Version string       `json:"version"`
 }
 
 const maxLobbyMembers = 128
@@ -40,7 +38,6 @@ func (l *Lobby) SnapshotFor(requesterIP string) *LobbySnapshot {
 	return &LobbySnapshot{
 		Key:     l.Key,
 		Members: views,
-		Version: l.Version,
 	}
 }
 

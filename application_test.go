@@ -24,7 +24,7 @@ func TestApplicationRouteAssembly(t *testing.T) {
 		t.Fatalf("explicit report route reached fallback: status %d: %s", recorder.Code, recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()
-	application.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/1.2.3/reports/crash", nil))
+	application.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, apiPrefix+"/reports/crash", nil))
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("wrong method status = %d, want 405", recorder.Code)
 	}
@@ -41,7 +41,7 @@ func TestApplicationFeatureSwitchesAndServiceIdentity(t *testing.T) {
 	}
 	t.Cleanup(application.Close)
 
-	for _, path := range []string{"/events", "/1.2.3/reports/crash"} {
+	for _, path := range []string{"/events", apiPrefix + "/reports/crash"} {
 		recorder := httptest.NewRecorder()
 		application.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		if recorder.Code != http.StatusNotFound {

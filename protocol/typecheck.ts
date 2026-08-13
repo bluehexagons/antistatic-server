@@ -8,6 +8,10 @@ import type {
 } from './index.js';
 
 const matchmaking_request = {
+  client_version: '0.11.0',
+  compatibility_id: 'antistatic-v1',
+  queue: 'default',
+  port: 45860,
   metadata: { character: 'Carbon' },
   local_ips: ['192.168.1.2'],
   local_endpoints: [{ ip: '192.168.1.2', port: 45860 }],
@@ -37,15 +41,15 @@ const lobby_response = {
   lobby: {
     key: 'ABC123',
     members: [{ endpoints: [{ ip: '198.51.100.10', port: 45860 }] }],
-    version: '0.11.0',
   },
   endpoint: { ip: '198.51.100.10', port: 45860 },
   token: 'owner-token',
 } satisfies LobbyResponse;
 
 const crash_report = {
+  client_version: '0.11.0',
+  compatibility_id: 'antistatic-v1',
   event_id: 'random-event-id-0001',
-  app_version: '0.11.0',
   platform: 'linux',
   arch: 'x64',
   reason_code: 'segfault',
@@ -53,6 +57,8 @@ const crash_report = {
 } satisfies CrashReportRequest;
 
 const gameplay_metric = {
+  client_version: '0.11.0',
+  compatibility_id: 'antistatic-v1',
   event_id: 'random-event-id-0002',
   mode: 'versus',
   stage: 'arena',
@@ -67,6 +73,8 @@ const gameplay_metric = {
 } satisfies GameplayMetricRequest;
 
 const performance_metric = {
+  client_version: '0.11.0',
+  compatibility_id: 'antistatic-v1',
   event_id: 'random-event-id-0003',
   platform: 'linux',
   arch: 'x64',

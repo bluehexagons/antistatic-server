@@ -23,8 +23,9 @@ var symbolPattern = regexp.MustCompile(`^[A-Za-z0-9_:.<>~()+*,& -]{1,120}$`)
 var reportIDPattern = regexp.MustCompile(`^(cr|fb|nr)-[a-f0-9]{16}$`)
 
 type crashRequest struct {
+	clientIdentity
 	EventID    string   `json:"event_id"`
-	AppVersion string   `json:"app_version"`
+	AppVersion string   `json:"-"`
 	Platform   string   `json:"platform"`
 	Arch       string   `json:"arch"`
 	ReasonCode string   `json:"reason_code"`
@@ -32,6 +33,7 @@ type crashRequest struct {
 }
 
 type feedbackRequest struct {
+	clientIdentity
 	EventID         string `json:"event_id"`
 	Category        string `json:"category"`
 	Subject         string `json:"subject"`
@@ -40,6 +42,7 @@ type feedbackRequest struct {
 }
 
 type gameplayRequest struct {
+	clientIdentity
 	EventID           string `json:"event_id"`
 	Mode              string `json:"mode"`
 	Stage             string `json:"stage"`
@@ -54,6 +57,7 @@ type gameplayRequest struct {
 }
 
 type performanceRequest struct {
+	clientIdentity
 	EventID          string  `json:"event_id"`
 	Platform         string  `json:"platform"`
 	Arch             string  `json:"arch"`
@@ -92,7 +96,7 @@ func validTextLength(value string, maximum int) bool {
 }
 
 func (request crashRequest) valid() bool {
-	if !validEventID(request.EventID) || !validateVersion(request.AppVersion) || !validPlatform(request.Platform) || !validArch(request.Arch) || !reasonCodePattern.MatchString(request.ReasonCode) {
+	if !validEventID(request.EventID) || !validPlatform(request.Platform) || !validArch(request.Arch) || !reasonCodePattern.MatchString(request.ReasonCode) {
 		return false
 	}
 	if request.Symbols == nil || len(request.Symbols) > 48 {
@@ -183,35 +187,30 @@ func writeIngestError(w http.ResponseWriter, status int) {
 type reportAPI struct {
 	store   *reportStore
 	limiter *rateLimiter
+	config  Config
 }
 
-func (api reportAPI) validateVersion(w http.ResponseWriter, r *http.Request) (string, bool) {
+func (api reportAPI) validateRequest(w http.ResponseWriter, r *http.Request) bool {
 	if !requestIsHTTPS(r) {
 		clientIP := net.ParseIP(getClientIP(r))
 		if clientIP == nil || !clientIP.IsLoopback() {
 			writeIngestError(w, http.StatusUpgradeRequired)
-			return "", false
+			return false
 		}
 	}
 	if api.limiter != nil && !api.limiter.allow(getClientIP(r)+"|"+r.URL.Path) {
 		writeIngestError(w, http.StatusTooManyRequests)
-		return "", false
-	}
-	version := r.PathValue("version")
-	if !validateVersion(version) {
-		writeIngestError(w, http.StatusBadRequest)
-		return "", false
+		return false
 	}
 	if api.store == nil {
 		writeIngestError(w, http.StatusServiceUnavailable)
-		return "", false
+		return false
 	}
-	return version, true
+	return true
 }
 
 func (api reportAPI) crash(w http.ResponseWriter, r *http.Request) {
-	_, ok := api.validateVersion(w, r)
-	if !ok {
+	if !api.validateRequest(w, r) {
 		return
 	}
 	var request crashRequest
@@ -219,10 +218,14 @@ func (api reportAPI) crash(w http.ResponseWriter, r *http.Request) {
 		writeIngestError(w, status)
 		return
 	}
+	if !validateClientIdentity(w, api.config, request.clientIdentity) {
+		return
+	}
 	if !request.valid() {
 		writeIngestError(w, http.StatusBadRequest)
 		return
 	}
+	request.AppVersion = request.ClientVersion
 	id, _, err := api.store.appendCrash(request)
 	if err != nil {
 		slog.Error("Crash report storage failed", "error", err)
@@ -230,14 +233,12 @@ func (api reportAPI) crash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set(antistaticReportIDHeader, id)
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(reportResponse{ReportID: id})
 }
 
 func (api reportAPI) feedback(w http.ResponseWriter, r *http.Request) {
-	version, ok := api.validateVersion(w, r)
-	if !ok {
+	if !api.validateRequest(w, r) {
 		return
 	}
 	var request feedbackRequest
@@ -245,25 +246,26 @@ func (api reportAPI) feedback(w http.ResponseWriter, r *http.Request) {
 		writeIngestError(w, status)
 		return
 	}
+	if !validateClientIdentity(w, api.config, request.clientIdentity) {
+		return
+	}
 	if !request.valid() {
 		writeIngestError(w, http.StatusBadRequest)
 		return
 	}
-	id, _, err := api.store.appendFeedback(request, version)
+	id, _, err := api.store.appendFeedback(request, request.ClientVersion)
 	if err != nil {
 		slog.Error("Feedback storage failed", "error", err)
 		writeIngestError(w, http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set(antistaticReportIDHeader, id)
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(reportResponse{ReportID: id})
 }
 
 func (api reportAPI) gameplay(w http.ResponseWriter, r *http.Request) {
-	version, ok := api.validateVersion(w, r)
-	if !ok {
+	if !api.validateRequest(w, r) {
 		return
 	}
 	var request gameplayRequest
@@ -271,11 +273,14 @@ func (api reportAPI) gameplay(w http.ResponseWriter, r *http.Request) {
 		writeIngestError(w, status)
 		return
 	}
+	if !validateClientIdentity(w, api.config, request.clientIdentity) {
+		return
+	}
 	if !request.valid() {
 		writeIngestError(w, http.StatusBadRequest)
 		return
 	}
-	if _, err := api.store.appendGameplay(request, version); err != nil {
+	if _, err := api.store.appendGameplay(request, request.ClientVersion); err != nil {
 		slog.Error("Gameplay metric storage failed", "error", err)
 		writeIngestError(w, http.StatusServiceUnavailable)
 		return
@@ -284,8 +289,7 @@ func (api reportAPI) gameplay(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api reportAPI) performance(w http.ResponseWriter, r *http.Request) {
-	version, ok := api.validateVersion(w, r)
-	if !ok {
+	if !api.validateRequest(w, r) {
 		return
 	}
 	var request performanceRequest
@@ -293,11 +297,14 @@ func (api reportAPI) performance(w http.ResponseWriter, r *http.Request) {
 		writeIngestError(w, status)
 		return
 	}
+	if !validateClientIdentity(w, api.config, request.clientIdentity) {
+		return
+	}
 	if !request.valid() {
 		writeIngestError(w, http.StatusBadRequest)
 		return
 	}
-	if _, err := api.store.appendPerformance(request, version); err != nil {
+	if _, err := api.store.appendPerformance(request, request.ClientVersion); err != nil {
 		slog.Error("Performance metric storage failed", "error", err)
 		writeIngestError(w, http.StatusServiceUnavailable)
 		return

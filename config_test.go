@@ -78,7 +78,7 @@ func TestConfiguredTimeoutsControlMaintenance(t *testing.T) {
 	handler := newTestLobbyHandler()
 	handler.Config = config
 	handler.Lobbies["1|room"] = &Lobby{
-		Key: "room", Version: "1", Members: []*Member{{CheckedIn: now.Add(-2 * time.Second)}},
+		Key: "room", Members: []*Member{{CheckedIn: now.Add(-2 * time.Second)}},
 	}
 	ticket := &MatchmakingTicket{
 		ID: "ticket", Version: "1", Queue: "default", CheckedIn: now.Add(-2 * time.Second),

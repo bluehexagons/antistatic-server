@@ -15,6 +15,7 @@ const configSchemaVersion = 1
 const maxConfigBytes = 64 * 1024
 const maxConfiguredEvents = 32
 const maxServiceNameLength = 80
+const maxCompatibilityIDLength = 64
 const maxEventIDLength = 64
 const maxEventNameLength = 100
 const maxEventRegionLength = 64
@@ -83,7 +84,8 @@ func (d *ConfigWeekday) UnmarshalJSON(data []byte) error {
 }
 
 type ServiceConfig struct {
-	Name string `json:"name"`
+	Name            string `json:"name"`
+	CompatibilityID string `json:"compatibility_id"`
 }
 
 type FeatureConfig struct {
@@ -128,7 +130,10 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		SchemaVersion: configSchemaVersion,
-		Service:       ServiceConfig{Name: "Antistatic"},
+		Service: ServiceConfig{
+			Name:            "Antistatic",
+			CompatibilityID: "antistatic-v1",
+		},
 		Features: FeatureConfig{
 			Events:             true,
 			CrashReports:       true,
@@ -210,6 +215,9 @@ func validateConfig(config Config) error {
 	trimmedServiceName := strings.TrimSpace(config.Service.Name)
 	if trimmedServiceName == "" || len(config.Service.Name) > maxServiceNameLength || config.Service.Name != trimmedServiceName {
 		return fmt.Errorf("service.name must contain 1-%d bytes", maxServiceNameLength)
+	}
+	if len(config.Service.CompatibilityID) > maxCompatibilityIDLength || !coarseIdentifierPattern.MatchString(config.Service.CompatibilityID) {
+		return fmt.Errorf("service.compatibility_id must contain 1-%d letters, digits, dots, underscores, or hyphens", maxCompatibilityIDLength)
 	}
 	durations := []struct {
 		name  string

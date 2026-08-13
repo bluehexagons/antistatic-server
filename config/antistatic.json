@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
   "service": {
-    "name": "Antistatic"
+    "name": "Antistatic",
+    "compatibility_id": "antistatic-v1"
   },
   "features": {
     "events": true,

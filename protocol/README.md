@@ -31,3 +31,8 @@ Stable package versions follow server releases. During coordinated development,
 Antistatic may pin an immutable `protocol-v*-dev.*` tag that does not trigger a
 binary release. The final client pins the matching immutable server release;
 mixed client and server versions are unsupported.
+
+The HTTP surface is fixed at `/api/v1`. Every request body includes
+`client_version` for diagnostics and `compatibility_id` for exact protocol
+admission. Ownership tokens use `Authorization: Bearer …`; no custom ownership
+or match-code headers are part of the API.

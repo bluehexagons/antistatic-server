@@ -76,9 +76,9 @@ func securityHeaders(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 			w.Header().Set(
 				"Access-Control-Allow-Headers",
-				"Content-Type, X-Request-ID, X-Antistatic-Token, X-Antistatic-Match-Self-Tag, X-Antistatic-Match-Peer-Tag, X-Antistatic-Match-Self-Tag-Token",
+				"Authorization, Content-Type, X-Request-ID",
 			)
-			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, "+antistaticReportIDHeader)
+			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
 			w.Header().Set("Access-Control-Max-Age", "3600")
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -100,11 +100,11 @@ func securityHeaders(next http.Handler) http.Handler {
 
 func isIngestionPath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 3 || parts[0] == "" {
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "v1" {
 		return false
 	}
-	return (parts[1] == "reports" && (parts[2] == "crash" || parts[2] == "feedback")) ||
-		(parts[1] == "metrics" && (parts[2] == "gameplay" || parts[2] == "performance"))
+	return (parts[2] == "reports" && (parts[3] == "crash" || parts[3] == "feedback")) ||
+		(parts[2] == "metrics" && (parts[3] == "gameplay" || parts[3] == "performance"))
 }
 
 func withTimeout(timeout time.Duration) func(http.Handler) http.Handler {

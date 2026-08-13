@@ -66,7 +66,7 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*appl
 		lobby.LastStoreCompaction = time.Now()
 	}
 	reportLimiter := newRateLimiter(10, 20, time.Minute)
-	api := reportAPI{store: config.Store, limiter: reportLimiter}
+	api := reportAPI{store: config.Store, limiter: reportLimiter, config: config.Game}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { serveHealth(lobby, w, r) })
 	mux.HandleFunc("/health.html", func(w http.ResponseWriter, r *http.Request) { serveHealthHTML(lobby, w, r) })
@@ -75,16 +75,16 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*appl
 	}
 	mux.HandleFunc("/robots.txt", robotsHandler)
 	if config.Game.Features.CrashReports {
-		mux.HandleFunc("/{version}/reports/crash", postOnly(api.crash))
+		mux.HandleFunc(apiPrefix+"/reports/crash", postOnly(api.crash))
 	}
 	if config.Game.Features.FeedbackReports {
-		mux.HandleFunc("/{version}/reports/feedback", postOnly(api.feedback))
+		mux.HandleFunc(apiPrefix+"/reports/feedback", postOnly(api.feedback))
 	}
 	if config.Game.Features.GameplayMetrics {
-		mux.HandleFunc("/{version}/metrics/gameplay", postOnly(api.gameplay))
+		mux.HandleFunc(apiPrefix+"/metrics/gameplay", postOnly(api.gameplay))
 	}
 	if config.Game.Features.PerformanceMetrics {
-		mux.HandleFunc("/{version}/metrics/performance", postOnly(api.performance))
+		mux.HandleFunc(apiPrefix+"/metrics/performance", postOnly(api.performance))
 	}
 	if config.AdminUsername != "" {
 		admin := newAdminHandler(config.Store, config.AdminUsername, config.AdminPassword, config.Game.Service.Name)

@@ -185,14 +185,14 @@ func TestSecurityHeaders(t *testing.T) {
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Error("X-Content-Type-Options header not set")
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, antistaticTokenHeader) {
-		t.Errorf("Access-Control-Allow-Headers = %q, want %s", got, antistaticTokenHeader)
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Authorization") {
+		t.Errorf("Access-Control-Allow-Headers = %q, want Authorization", got)
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Methods"); !strings.Contains(got, "POST") {
 		t.Errorf("Access-Control-Allow-Methods = %q, want POST", got)
 	}
-	if got := rec.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(got, antistaticReportIDHeader) {
-		t.Errorf("Access-Control-Expose-Headers = %q, want %s", got, antistaticReportIDHeader)
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "X-Request-ID" {
+		t.Errorf("Access-Control-Expose-Headers = %q, want X-Request-ID", got)
 	}
 }
 
@@ -215,10 +215,10 @@ func TestSecurityHeadersOmitCORSForIngestionRoutes(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	for _, path := range []string{
-		"/1.0/reports/crash",
-		"/1.0/reports/feedback",
-		"/1.0/metrics/gameplay",
-		"/1.0/metrics/performance",
+		apiPrefix + "/reports/crash",
+		apiPrefix + "/reports/feedback",
+		apiPrefix + "/metrics/gameplay",
+		apiPrefix + "/metrics/performance",
 	} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
@@ -227,7 +227,7 @@ func TestSecurityHeadersOmitCORSForIngestionRoutes(t *testing.T) {
 		}
 	}
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/1.0/lobby/ABC/1234", nil))
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, apiPrefix+"/lobbies/ABC", nil))
 	if recorder.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Fatalf("lobby CORS origin = %q, want wildcard preserved", recorder.Header().Get("Access-Control-Allow-Origin"))
 	}
