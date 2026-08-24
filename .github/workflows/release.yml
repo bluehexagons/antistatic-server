@@ -45,7 +45,7 @@ jobs:
           - goos: windows
             goarch: amd64
             output: antistatic-server-windows-amd64.exe
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -75,7 +75,7 @@ jobs:
     name: Create release
     needs: build
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v8

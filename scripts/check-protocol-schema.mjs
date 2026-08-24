@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 const root = new URL('../', import.meta.url);
 const document = JSON.parse(readFileSync(new URL('protocol/openapi.json', root), 'utf8'));
 
-const resolveRef = ref => {
+const resolveRef = (ref) => {
   assert(ref.startsWith('#/'), `only local OpenAPI references are supported: ${ref}`);
   let value = document;
   for (const segment of ref.slice(2).split('/')) {
@@ -14,7 +14,7 @@ const resolveRef = ref => {
   return value;
 };
 
-const visit = value => {
+const visit = (value) => {
   if (Array.isArray(value)) {
     value.forEach(visit);
     return;
@@ -28,10 +28,13 @@ visit(document);
 const valid = (schema, value) => {
   if (schema === false) return { ok: false, properties: new Set() };
   if (schema.$ref) return valid(resolveRef(schema.$ref), value);
-  if (schema.const !== undefined && value !== schema.const) return { ok: false, properties: new Set() };
+  if (schema.const !== undefined && value !== schema.const)
+    return { ok: false, properties: new Set() };
   if (schema.enum && !schema.enum.includes(value)) return { ok: false, properties: new Set() };
   if (schema.oneOf) {
-    const matches = schema.oneOf.map(candidate => valid(candidate, value)).filter(result => result.ok);
+    const matches = schema.oneOf
+      .map((candidate) => valid(candidate, value))
+      .filter((result) => result.ok);
     return matches.length === 1 ? matches[0] : { ok: false, properties: new Set() };
   }
 
@@ -40,58 +43,81 @@ const valid = (schema, value) => {
     for (const candidate of schema.allOf) {
       const result = valid(candidate, value);
       if (!result.ok) return result;
-      result.properties.forEach(property => evaluated.add(property));
+      result.properties.forEach((property) => evaluated.add(property));
     }
   }
 
-  const types = Array.isArray(schema.type) ? schema.type : schema.type === undefined ? [] : [schema.type];
-  if (types.length > 0 && !types.some(type => matchesType(type, value))) {
+  const types = Array.isArray(schema.type)
+    ? schema.type
+    : schema.type === undefined
+      ? []
+      : [schema.type];
+  if (types.length > 0 && !types.some((type) => matchesType(type, value))) {
     return { ok: false, properties: evaluated };
   }
   if (typeof value === 'string') {
-    if ((schema.minLength ?? 0) > value.length || value.length > (schema.maxLength ?? Infinity)) return { ok: false, properties: evaluated };
-    if (schema.pattern && !new RegExp(schema.pattern, 'u').test(value)) return { ok: false, properties: evaluated };
+    if ((schema.minLength ?? 0) > value.length || value.length > (schema.maxLength ?? Infinity))
+      return { ok: false, properties: evaluated };
+    if (schema.pattern && !new RegExp(schema.pattern, 'u').test(value))
+      return { ok: false, properties: evaluated };
   }
   if (typeof value === 'number') {
-    if (schema.type === 'integer' && !Number.isInteger(value)) return { ok: false, properties: evaluated };
-    if (value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity)) return { ok: false, properties: evaluated };
-    if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) return { ok: false, properties: evaluated };
+    if (schema.type === 'integer' && !Number.isInteger(value))
+      return { ok: false, properties: evaluated };
+    if (value < (schema.minimum ?? -Infinity) || value > (schema.maximum ?? Infinity))
+      return { ok: false, properties: evaluated };
+    if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum)
+      return { ok: false, properties: evaluated };
   }
   if (Array.isArray(value)) {
-    if (value.length < (schema.minItems ?? 0) || value.length > (schema.maxItems ?? Infinity)) return { ok: false, properties: evaluated };
-    if (schema.items && value.some(item => !valid(schema.items, item).ok)) return { ok: false, properties: evaluated };
+    if (value.length < (schema.minItems ?? 0) || value.length > (schema.maxItems ?? Infinity))
+      return { ok: false, properties: evaluated };
+    if (schema.items && value.some((item) => !valid(schema.items, item).ok))
+      return { ok: false, properties: evaluated };
   }
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const required = schema.required ?? [];
-    if (required.some(property => !Object.hasOwn(value, property))) return { ok: false, properties: evaluated };
+    if (required.some((property) => !Object.hasOwn(value, property)))
+      return { ok: false, properties: evaluated };
     for (const [property, propertySchema] of Object.entries(schema.properties ?? {})) {
       if (!Object.hasOwn(value, property)) continue;
       evaluated.add(property);
       if (!valid(propertySchema, value[property]).ok) return { ok: false, properties: evaluated };
     }
-    const extras = Object.keys(value).filter(property => !evaluated.has(property));
-    if (schema.additionalProperties === false && extras.length > 0) return { ok: false, properties: evaluated };
+    const extras = Object.keys(value).filter((property) => !evaluated.has(property));
+    if (schema.additionalProperties === false && extras.length > 0)
+      return { ok: false, properties: evaluated };
     if (typeof schema.additionalProperties === 'object') {
       for (const property of extras) {
-        if (!valid(schema.additionalProperties, value[property]).ok) return { ok: false, properties: evaluated };
+        if (!valid(schema.additionalProperties, value[property]).ok)
+          return { ok: false, properties: evaluated };
         evaluated.add(property);
       }
     }
-    if (schema.unevaluatedProperties === false && extras.length > 0) return { ok: false, properties: evaluated };
+    if (schema.unevaluatedProperties === false && extras.length > 0)
+      return { ok: false, properties: evaluated };
   }
   return { ok: true, properties: evaluated };
 };
 
 function matchesType(type, value) {
   switch (type) {
-    case 'object': return typeof value === 'object' && value !== null && !Array.isArray(value);
-    case 'array': return Array.isArray(value);
-    case 'string': return typeof value === 'string';
-    case 'integer': return typeof value === 'number' && Number.isInteger(value);
-    case 'number': return typeof value === 'number' && Number.isFinite(value);
-    case 'boolean': return typeof value === 'boolean';
-    case 'null': return value === null;
-    default: throw new Error(`unsupported schema type: ${type}`);
+    case 'object':
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    case 'array':
+      return Array.isArray(value);
+    case 'string':
+      return typeof value === 'string';
+    case 'integer':
+      return typeof value === 'number' && Number.isInteger(value);
+    case 'number':
+      return typeof value === 'number' && Number.isFinite(value);
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'null':
+      return value === null;
+    default:
+      throw new Error(`unsupported schema type: ${type}`);
   }
 }
 
@@ -124,7 +150,11 @@ const fixtureCases = [
 ];
 for (const [schemaName, fixture, expected] of fixtureCases) {
   const value = JSON.parse(readFileSync(new URL(`protocol/fixtures/${fixture}`, root), 'utf8'));
-  assert.equal(valid(document.components.schemas[schemaName], value).ok, expected, `${fixture} validation`);
+  assert.equal(
+    valid(document.components.schemas[schemaName], value).ok,
+    expected,
+    `${fixture} validation`,
+  );
 }
 
 for (const path of [

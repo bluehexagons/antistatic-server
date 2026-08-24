@@ -93,67 +93,69 @@ Use `-cert path` and `-key path` to specify custom locations.
 Specifying a port using -tlsport will implicitly enable TLS.
 
 ### CLI Flags
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-host` | "" | HTTP host to listen on |
-| `-port` | 80 | HTTP port to listen on |
-| `-tls` | false | Enables TLS (sets tlsport to 443 if unspecified) |
-| `-tlshost` | "" | TLS host to listen on |
-| `-tlsport` | 0 | TLS port to listen on |
-| `-cert` | cert.crt | File to use as TLS cert |
-| `-key` | cert.key | File to use as TLS key |
-| `-autocert` | "" | Domain for automatic TLS (Let's Encrypt) |
-| `-autocert-cache` | certs | Cache directory for autocert certificates |
-| `-nohttp` | false | Disables the application HTTP listener (autocert still serves ACME challenges on port 80) |
-| `-read-timeout` | 15s | HTTP read timeout |
-| `-write-timeout` | 15s | HTTP write timeout |
-| `-idle-timeout` | 60s | HTTP idle timeout |
-| `-trust-proxy` | false | Trust X-Forwarded-For and X-Real-IP headers |
-| `-trusted-proxy-cidrs` | "" | Comma-separated CIDR allowlist for trusted reverse proxies |
-| `-stun-host` | "" | Bind address for the built-in STUN responder (default: dual-stack any-address) |
-| `-stun-port` | 0 | UDP port for the built-in STUN responder (0 disables; conventional value is 3478) |
-| `-config` | built-in Antistatic profile | Optional JSON game profile to overlay on the defaults |
+
+| Flag                   | Default                     | Description                                                                               |
+| ---------------------- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| `-host`                | ""                          | HTTP host to listen on                                                                    |
+| `-port`                | 80                          | HTTP port to listen on                                                                    |
+| `-tls`                 | false                       | Enables TLS (sets tlsport to 443 if unspecified)                                          |
+| `-tlshost`             | ""                          | TLS host to listen on                                                                     |
+| `-tlsport`             | 0                           | TLS port to listen on                                                                     |
+| `-cert`                | cert.crt                    | File to use as TLS cert                                                                   |
+| `-key`                 | cert.key                    | File to use as TLS key                                                                    |
+| `-autocert`            | ""                          | Domain for automatic TLS (Let's Encrypt)                                                  |
+| `-autocert-cache`      | certs                       | Cache directory for autocert certificates                                                 |
+| `-nohttp`              | false                       | Disables the application HTTP listener (autocert still serves ACME challenges on port 80) |
+| `-read-timeout`        | 15s                         | HTTP read timeout                                                                         |
+| `-write-timeout`       | 15s                         | HTTP write timeout                                                                        |
+| `-idle-timeout`        | 60s                         | HTTP idle timeout                                                                         |
+| `-trust-proxy`         | false                       | Trust X-Forwarded-For and X-Real-IP headers                                               |
+| `-trusted-proxy-cidrs` | ""                          | Comma-separated CIDR allowlist for trusted reverse proxies                                |
+| `-stun-host`           | ""                          | Bind address for the built-in STUN responder (default: dual-stack any-address)            |
+| `-stun-port`           | 0                           | UDP port for the built-in STUN responder (0 disables; conventional value is 3478)         |
+| `-config`              | built-in Antistatic profile | Optional JSON game profile to overlay on the defaults                                     |
 
 ### Operational limits
 
 To keep memory and CPU bounded under abusive traffic, the server enforces fixed in-memory limits:
 
-| Limit | Value |
-|-------|-------|
-| URL path length | 512 bytes |
-| Request body size | 10 KiB |
-| Tracked rate-limit clients | 65,536 |
-| Active lobbies | 10,000 |
-| Members per lobby | 128 |
-| Matchmaking tickets | 20,000 |
-| Active matchmaking matches | 10,000 |
-| Match-by-code tag leases | 20,000 |
-| Match-by-code tag leases per client IP | 8 |
-| Report collection file | 64 MiB |
-| Retained records per collection | 10,000 |
+| Limit                                  | Value     |
+| -------------------------------------- | --------- |
+| URL path length                        | 512 bytes |
+| Request body size                      | 10 KiB    |
+| Tracked rate-limit clients             | 65,536    |
+| Active lobbies                         | 10,000    |
+| Members per lobby                      | 128       |
+| Matchmaking tickets                    | 20,000    |
+| Active matchmaking matches             | 10,000    |
+| Match-by-code tag leases               | 20,000    |
+| Match-by-code tag leases per client IP | 8         |
+| Report collection file                 | 64 MiB    |
+| Retained records per collection        | 10,000    |
 
 When a capacity limit is reached, new state-creating requests return `503 Service Unavailable`; existing tickets and lobby members can continue to refresh until they expire or are deleted.
 
 ### Environment variables
 
-| Variable | Description |
-|----------|-------------|
-| `ANTISTATIC_DATA_DIR` | Directory for the append-only report JSON Lines files. When unset, collection endpoints return 503. |
-| `ANTISTATIC_ADMIN_USERNAME` | HTTP Basic username for `/admin/`. Must be set with the password. |
-| `ANTISTATIC_ADMIN_PASSWORD` | HTTP Basic password for `/admin/`. Must be set with the username. |
+| Variable                    | Description                                                                                         |
+| --------------------------- | --------------------------------------------------------------------------------------------------- |
+| `ANTISTATIC_DATA_DIR`       | Directory for the append-only report JSON Lines files. When unset, collection endpoints return 503. |
+| `ANTISTATIC_ADMIN_USERNAME` | HTTP Basic username for `/admin/`. Must be set with the password.                                   |
+| `ANTISTATIC_ADMIN_PASSWORD` | HTTP Basic password for `/admin/`. Must be set with the username.                                   |
 
 If exactly one admin credential is set, startup fails. If both are unset, admin
 routes are not registered and return 404. Admin pages can still be enabled when
 the data directory is unset; they show storage as unavailable.
 
 ### Examples
-* `antistatic-server -tls -cert /etc/tls/server.crt -key /etc/tls/server.key` - Custom cert/key locations
-* `antistatic-server -tls -nohttp` - HTTPS only, no HTTP
-* `antistatic-server -port 8080` - Custom HTTP port
-* `antistatic-server -autocert example.com` - Automatic TLS with Let's Encrypt
-* `antistatic-server -autocert example.com -autocert-cache /var/cache/certs` - Custom cache directory
-* `antistatic-server -read-timeout 30s -write-timeout 30s` - Custom timeouts
-* `antistatic-server -trust-proxy -trusted-proxy-cidrs 127.0.0.1/32` - Trust proxy headers from a local reverse proxy
+
+- `antistatic-server -tls -cert /etc/tls/server.crt -key /etc/tls/server.key` - Custom cert/key locations
+- `antistatic-server -tls -nohttp` - HTTPS only, no HTTP
+- `antistatic-server -port 8080` - Custom HTTP port
+- `antistatic-server -autocert example.com` - Automatic TLS with Let's Encrypt
+- `antistatic-server -autocert example.com -autocert-cache /var/cache/certs` - Custom cache directory
+- `antistatic-server -read-timeout 30s -write-timeout 30s` - Custom timeouts
+- `antistatic-server -trust-proxy -trusted-proxy-cidrs 127.0.0.1/32` - Trust proxy headers from a local reverse proxy
 
 Automatic TLS listens on all interfaces at `-tlsport` (port 443 when omitted). With `-nohttp`, the application HTTP listener stays disabled, but autocert still opens port 80 on all interfaces for ACME HTTP-01 challenges. Both TCP ports must be publicly reachable for certificate issuance and HTTPS service.
 
@@ -191,6 +193,7 @@ through a trusted proxy must follow the same rule; otherwise the fail-closed
 identity check returns `400 Bad Request`.
 
 Quick command to generate a self-signed certificate:
+
 ```bash
 openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert.crt
 ```
@@ -200,23 +203,24 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 [`protocol/openapi.json`](protocol/openapi.json) is the OpenAPI 3.1 source of
 truth for the JSON API. `npm run generate` updates the published TypeScript
 declarations, while `npm run check` validates local references and shared
-fixtures and fails if the generated file is stale. The package intentionally
-adds no runtime validation or handler generation to the server.
+fixtures, type-checks and lints the tooling, checks Oxfmt formatting, and fails
+if the generated file is stale. The package intentionally adds no runtime
+validation or handler generation to the server.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | JSON health check with live counts, split HTTP/game error logs, and aggregate activity |
-| `GET` | `/health.html` | Human-readable HTML health view with the same data |
-| `GET` | `/events` | Upcoming recurring community queue events |
-| `PUT` | `/api/v1/lobbies/{key}` | Register/update a lobby member |
-| `DELETE` | `/api/v1/lobbies/{key}` | Remove a lobby member |
-| `PUT` | `/api/v1/matchmaking/{ticket}` | Register, refresh, or long-poll a matchmaking ticket |
-| `DELETE` | `/api/v1/matchmaking/{ticket}` | Cancel a matchmaking ticket |
-| `POST` | `/api/v1/matchmaking/{ticket}/outcome` | Submit an authenticated coarse game outcome |
-| `POST` | `/api/v1/reports/crash` | Submit a crash report |
-| `POST` | `/api/v1/reports/feedback` | Submit feedback |
-| `POST` | `/api/v1/metrics/gameplay` | Submit a coarse gameplay sample |
-| `POST` | `/api/v1/metrics/performance` | Submit a coarse performance sample |
+| Method   | Endpoint                               | Description                                                                            |
+| -------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
+| `GET`    | `/health`                              | JSON health check with live counts, split HTTP/game error logs, and aggregate activity |
+| `GET`    | `/health.html`                         | Human-readable HTML health view with the same data                                     |
+| `GET`    | `/events`                              | Upcoming recurring community queue events                                              |
+| `PUT`    | `/api/v1/lobbies/{key}`                | Register/update a lobby member                                                         |
+| `DELETE` | `/api/v1/lobbies/{key}`                | Remove a lobby member                                                                  |
+| `PUT`    | `/api/v1/matchmaking/{ticket}`         | Register, refresh, or long-poll a matchmaking ticket                                   |
+| `DELETE` | `/api/v1/matchmaking/{ticket}`         | Cancel a matchmaking ticket                                                            |
+| `POST`   | `/api/v1/matchmaking/{ticket}/outcome` | Submit an authenticated coarse game outcome                                            |
+| `POST`   | `/api/v1/reports/crash`                | Submit a crash report                                                                  |
+| `POST`   | `/api/v1/reports/feedback`             | Submit feedback                                                                        |
+| `POST`   | `/api/v1/metrics/gameplay`             | Submit a coarse gameplay sample                                                        |
+| `POST`   | `/api/v1/metrics/performance`          | Submit a coarse performance sample                                                     |
 
 ### Report collection API
 
@@ -376,6 +380,7 @@ deleting, or reporting on the same member or ticket. Tokens should not be
 logged or shared.
 
 ### Health Endpoint Response
+
 ```json
 {
   "status": "ok",
@@ -396,9 +401,7 @@ logged or shared.
   "activity": {
     "window_days": 14,
     "timezone": "UTC",
-    "hours": [
-      {"hour_utc": 0, "attempts": 12, "matches": 4, "average_match_wait_ms": 22000}
-    ]
+    "hours": [{ "hour_utc": 0, "attempts": 12, "matches": 4, "average_match_wait_ms": 22000 }]
   },
   "events": [
     {
@@ -445,30 +448,28 @@ tokens, and free-form client messages are never included in the health
 response.
 
 ### Lobby Check-In PUT Body
+
 ```json
 {
   "client_version": "0.10.8",
   "compatibility_id": "antistatic-v1",
   "port": 45860,
   "local_ips": ["192.168.1.20", "10.0.0.20"],
-  "local_endpoints": [
-    {"ip": "192.168.1.20", "port": 45860}
-  ]
+  "local_endpoints": [{ "ip": "192.168.1.20", "port": 45860 }]
 }
 ```
 
 `local_ips` and `local_endpoints` are optional. Entries are sanitized to private-scope addresses, and non-loopback endpoint IPs must also appear in `local_ips`. They are only reflected to lobby peers seen from the same public IP.
 
 ### Lobby Check-In Response
+
 ```json
 {
   "lobby": {
     "key": "ABC123",
     "members": [
       {
-        "endpoints": [
-          {"ip": "198.51.100.10", "port": 45860}
-        ],
+        "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
         "local_ips": ["192.168.1.20"]
       }
     ]
@@ -482,6 +483,7 @@ response.
 ```
 
 ### Matchmaking PUT Body
+
 ```json
 {
   "client_version": "0.10.8",
@@ -492,9 +494,7 @@ response.
     "character": "Carbon"
   },
   "local_ips": ["192.168.1.20", "10.0.0.20"],
-  "local_endpoints": [
-    {"ip": "192.168.1.20", "port": 45860}
-  ]
+  "local_endpoints": [{ "ip": "192.168.1.20", "port": 45860 }]
 }
 ```
 
@@ -522,6 +522,7 @@ token as `tag_token`, and only matches reciprocal claims (`A -> B` with
 8 active match-code leases.
 
 ### Matchmaking Queue Measurements
+
 Waiting, matched, and canceled matchmaking responses include aggregate `queue`
 measurements for the same compatibility identity and queue:
 
@@ -529,9 +530,7 @@ measurements for the same compatibility identity and queue:
 {
   "status": "waiting",
   "ticket": "ticket-id",
-  "endpoints": [
-    {"ip": "198.51.100.10", "port": 45860}
-  ],
+  "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
   "token": "ticket-owner-token",
   "queue": {
     "players_waiting": 1,
@@ -564,7 +563,12 @@ match-code claim when applicable), and one strict JSON event code. The server
 keeps only the fixed event code in its bounded recent log and aggregate counter:
 
 ```json
-{"client_version":"0.10.8","compatibility_id":"antistatic-v1","queue":"default","event":"match_connect_failed"}
+{
+  "client_version": "0.10.8",
+  "compatibility_id": "antistatic-v1",
+  "queue": "default",
+  "event": "match_connect_failed"
+}
 ```
 
 Supported event codes are `match_connected`, `match_connect_failed`,
@@ -591,10 +595,10 @@ connection failures.
 The server advertises the next occurrence of two public one-hour invitations
 through `/events`, the health responses, and matchmaking responses:
 
-| Event | UTC schedule |
-|-------|--------------|
+| Event                    | UTC schedule             |
+| ------------------------ | ------------------------ |
 | Americas community queue | Saturday 21:00–22:00 UTC |
-| Eurasia community queue | Sunday 18:00–19:00 UTC |
+| Eurasia community queue  | Sunday 18:00–19:00 UTC   |
 
 The schedule is a suggestion to concentrate otherwise sparse activity, not a
 tracked session. Clients should convert `starts_at_utc` and `ends_at_utc` to
@@ -602,35 +606,31 @@ local time and may show a reminder or countdown. UTC keeps the advertised
 instant stable when local daylight-saving rules change.
 
 ### Matchmaking Matched Response
+
 ```json
 {
   "status": "matched",
   "ticket": "ticket-id",
-  "endpoints": [
-    {"ip": "198.51.100.10", "port": 45860}
-  ],
+  "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
   "token": "ticket-owner-token",
   "match": {
     "id": "0.9.5|default|TicketA|TicketB",
     "role": "host",
     "matched_at_ms": 1783692000123,
     "peer": {
-      "endpoints": [
-        {"ip": "198.51.100.20", "port": 45861}
-      ],
-      "metadata": {"character": "Silicon"}
+      "endpoints": [{ "ip": "198.51.100.20", "port": 45861 }],
+      "metadata": { "character": "Silicon" }
     },
     "self": {
-      "endpoints": [
-        {"ip": "198.51.100.10", "port": 45860}
-      ],
-      "metadata": {"character": "Carbon"}
+      "endpoints": [{ "ip": "198.51.100.10", "port": 45860 }],
+      "metadata": { "character": "Carbon" }
     }
   }
 }
 ```
 
 ## Client setup
+
 Antistatic checks `config.server` for the lobby and matchmaking server URL.
 
 Set this using the `config` command; e.g. `config server \"http://example.com:8080\"` (quotes must be escaped until strings are better supported).
@@ -639,16 +639,25 @@ The change can be persisted by editing the `asconfig` JSON file (e.g. `nano ~/as
 and adding/changing the `server` property there. This config is loaded when the game starts.
 
 ## Logging
+
 The server uses structured JSON logging via `log/slog`. Example log output:
+
 ```json
-{"time":"2026-08-13T09:17:56.123Z","level":"ERROR","msg":"Request rejected: invalid remote address","requestID":"abc123"}
+{
+  "time": "2026-08-13T09:17:56.123Z",
+  "level": "ERROR",
+  "msg": "Request rejected: invalid remote address",
+  "requestID": "abc123"
+}
 ```
 
 Request logs deliberately omit addresses, tokens, lobby/ticket identifiers,
 request bodies, and report contents.
 
 ## Docker
+
 Build and run with Docker:
+
 ```bash
 docker build -t antistatic-server .
 docker run -p 80:80 -p 443:443 antistatic-server
@@ -675,11 +684,13 @@ docker run -p 443:443 \
 ```
 
 For automatic TLS, publish both ACME/HTTP and HTTPS and persist the certificate cache:
+
 ```bash
 docker run -p 80:80 -p 443:443 -v antistatic-certs:/certs antistatic-server -autocert example.com -autocert-cache /certs
 ```
 
 ## Building
+
 Requires Go 1.26.5 or later.
 
 ```bash
@@ -687,12 +698,15 @@ go build -o antistatic-server .
 ```
 
 For static binary (recommended for production):
+
 ```bash
 CGO_ENABLED=0 go build -o antistatic-server .
 ```
 
 ## Testing
+
 Run tests with:
+
 ```bash
 go test -v ./...
 ```

@@ -3,13 +3,6 @@
   "version": "0.11.0-dev.5",
   "description": "TypeScript declarations for the antistatic-server HTTP protocol",
   "license": "MIT",
-  "type": "module",
-  "types": "./protocol/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./protocol/index.d.ts"
-    }
-  },
   "files": [
     "protocol/index.d.ts",
     "protocol/openapi.json",
@@ -18,11 +11,24 @@
     "scripts/check-protocol-schema.mjs",
     "scripts/generate-protocol-types.mjs"
   ],
+  "type": "module",
+  "types": "./protocol/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./protocol/index.d.ts"
+    }
+  },
   "scripts": {
     "generate": "node scripts/generate-protocol-types.mjs",
-    "check": "node scripts/check-protocol-schema.mjs && node scripts/generate-protocol-types.mjs --check && tsc --noEmit -p protocol/tsconfig.json"
+    "check": "node scripts/check-protocol-schema.mjs && node scripts/generate-protocol-types.mjs --check && tsc --noEmit -p protocol/tsconfig.json && npm run lint && npm run format:check",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint scripts protocol/typecheck.ts --deny-warnings",
+    "lint:fix": "oxlint scripts protocol/typecheck.ts --fix --deny-warnings"
   },
   "devDependencies": {
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.79.0",
     "typescript": "^7.0.2"
   },
   "engines": {

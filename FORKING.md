@@ -25,14 +25,14 @@ existing features, a profile may be the only customization required.
 
 The main source-level customization points are:
 
-| File | Change here |
-| --- | --- |
-| `antistatic_profile.go` | Bundled defaults, feature selection, compatibility identity, timeouts, and events |
+| File                        | Change here                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `antistatic_profile.go`     | Bundled defaults, feature selection, compatibility identity, timeouts, and events                        |
 | `antistatic_matchmaking.go` | Typed ticket metadata, metadata validation, compatible-ticket selection, and participant role assignment |
-| `antistatic_reports.go` | Game-specific gameplay metric request, validation, and ingestion |
-| `antistatic_admin.go` | Game-specific retained gameplay record presentation |
-| `admin.go` | Generic report navigation plus crash, feedback, performance, and outcome presentation |
-| `store.go` | Persisted record shapes, retention, deduplication, and collection registration |
+| `antistatic_reports.go`     | Game-specific gameplay metric request, validation, and ingestion                                         |
+| `antistatic_admin.go`       | Game-specific retained gameplay record presentation                                                      |
+| `admin.go`                  | Generic report navigation plus crash, feedback, performance, and outcome presentation                    |
+| `store.go`                  | Persisted record shapes, retention, deduplication, and collection registration                           |
 
 Keep generic lifecycle and transport behavior in `lobby.go`, `matchmaking.go`,
 `member.go`, `server.go`, and `application.go` unless the game truly needs a
