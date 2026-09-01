@@ -693,6 +693,19 @@ docker run -p 80:80 -p 443:443 -v antistatic-certs:/certs antistatic-server -aut
 
 Requires Go 1.26.5 or later.
 
+On the standard infra-tools agent VM, select the Node 26+ release used by the
+protocol tooling, install dependencies, and run the complete local gate:
+
+```bash
+nvm use
+npm ci
+./scripts/check.sh
+```
+
+The gate validates generated protocol declarations, lint and formatting, Go
+race tests, `go vet`, and a CGO-disabled build. Use the narrower commands below
+while iterating.
+
 ```bash
 go build -o antistatic-server .
 ```
@@ -705,7 +718,7 @@ CGO_ENABLED=0 go build -o antistatic-server .
 
 ## Testing
 
-Run tests with:
+Run Go tests with:
 
 ```bash
 go test -v ./...

@@ -35,17 +35,11 @@ jobs:
       - name: Install protocol dependencies
         run: npm ci
 
-      - name: Check protocol package
-        run: npm run check
+      - name: Run validation
+        run: ./scripts/check.sh
 
       - name: Inspect protocol package
         run: npm pack --dry-run
-
-      - name: Test
-        run: go test -race ./...
-
-      - name: Vet
-        run: go vet ./...
 
   build:
     name: Build binaries
