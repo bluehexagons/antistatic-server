@@ -519,7 +519,10 @@ For Match by Code, set `queue` to `code` and include a JSON claim:
 The server leases the self tag to one owner token for 1 hour, returns that
 token as `tag_token`, and only matches reciprocal claims (`A -> B` with
 `B -> A`). Matching is case-insensitive. A single client IP can hold at most
-8 active match-code leases.
+8 active match-code leases. When a lease expires, its waiting search is removed
+and pending long polls are notified. Matched tickets remain available for
+outcome reporting until their separate retention timeout. This also applies
+when a deployment configures a lease shorter than the waiting-ticket lifetime.
 
 ### Matchmaking Queue Measurements
 

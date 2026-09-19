@@ -427,6 +427,13 @@ func (h *lobbyHandler) cleanupMatchmakingTagLeasesLocked(now time.Time) {
 	h.ensureMatchmakingIndexesLocked()
 	for key, lease := range h.TagLeases {
 		if now.After(lease.CheckedIn.Add(h.Config.Timeouts.MatchmakingTagLease.Duration())) {
+			// A waiting search must not outlive ownership of its friendly tag.
+			// This matters when the configured lease is shorter than the ticket
+			// lifetime. Keep matched tickets for outcome-report retention.
+			if ticket := h.Tickets[lease.TicketKey]; ticket != nil && ticket.MatchedID == "" {
+				h.recordQueueExpirationLocked(ticket, now)
+				h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
+			}
 			delete(h.TagLeases, key)
 		}
 	}
@@ -935,12 +942,12 @@ func parseLongPollWait(r *http.Request) time.Duration {
 	if raw == "" {
 		return 0
 	}
-	seconds, err := strconv.Atoi(raw)
+	seconds, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || seconds <= 0 {
 		return 0
 	}
-	wait := time.Duration(seconds) * time.Second
-	return min(wait, maxMatchmakingLongPoll)
+	// Clamp in seconds before converting to nanoseconds to avoid overflow.
+	return time.Duration(min(seconds, int64(maxMatchmakingLongPoll/time.Second))) * time.Second
 }
 
 // waitForMatchmakingResult waits for a ticket state notification, the

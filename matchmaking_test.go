@@ -927,6 +927,17 @@ func TestMatchmakingCodeTagLeaseExpiresAfterTimeout(t *testing.T) {
 	if second.Code != http.StatusOK {
 		t.Fatalf("second lease after expiry returned %d, want %d: %s", second.Code, http.StatusOK, second.Body.String())
 	}
+
+	peer := serveMatchmakingRequestWithTokenAndTags(h, http.MethodPut,
+		"/0.9.5/matchmaking/code.alpha1-bravo2/TicketC/45862", "198.51.100.30:32000",
+		matchmakingRequest{Metadata: matchmakingMetadata{Character: "Iron"}}, "", "BRAVO2", "ALPHA1", "")
+	if peer.Code != http.StatusOK {
+		t.Fatalf("peer returned %d: %s", peer.Code, peer.Body.String())
+	}
+	result := decodeMatchmakingResponse(t, peer)
+	if result.Match == nil || result.Match.Peer.Metadata.Character != "Silicon" {
+		t.Fatalf("peer matched %#v, want the new tag owner Silicon", result.Match)
+	}
 }
 
 func TestMatchmakingCodeTagLeaseRefreshExtendsExpiry(t *testing.T) {
@@ -1516,5 +1527,65 @@ func TestMatchmakingCancelRejectsPutOnlyFields(t *testing.T) {
 	)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("DELETE with PUT fields status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestParseLongPollWaitBoundsBeforeDurationConversion(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 0}, {"invalid", 0}, {"-1", 0}, {"0", 0}, {"1", time.Second},
+		{"10", maxMatchmakingLongPoll}, {"11", maxMatchmakingLongPoll},
+		{"9223372037", maxMatchmakingLongPoll}, {"9223372036854775807", maxMatchmakingLongPoll},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPut, "/?wait="+tc.value, nil)
+			if got := parseLongPollWait(r); got != tc.want {
+				t.Fatalf("wait = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExpiredTagLeaseCleansWaitingSearchButRetainsMatchedTicket(t *testing.T) {
+	for _, matched := range []bool{false, true} {
+		t.Run(fmt.Sprint(matched), func(t *testing.T) {
+			h := newTestLobbyHandler()
+			first := serveMatchmakingRequestWithTokenAndTags(h, http.MethodPut,
+				"/0.9.5/matchmaking/code.alpha1-bravo2/TicketA/45860", "198.51.100.10:32000",
+				matchmakingRequest{Metadata: matchmakingMetadata{Character: "Carbon"}}, "", "ALPHA1", "BRAVO2", "")
+			if first.Code != http.StatusOK {
+				t.Fatalf("registration returned %d", first.Code)
+			}
+			h.Mu.Lock()
+			defer h.Mu.Unlock()
+			key := matchmakingTicketKey("0.9.5", "code.alpha1-bravo2", "TicketA")
+			ticket := h.Tickets[key]
+			changed := ticket.stateChanged
+			if matched {
+				ticket.MatchedID = "retained-match"
+			}
+			lease := h.TagLeases[matchmakingTagLeaseKey("0.9.5", "ALPHA1")]
+			lease.CheckedIn = time.Now().Add(-h.Config.Timeouts.MatchmakingTagLease.Duration() - time.Second)
+			h.cleanupMatchmakingTagLeasesLocked(time.Now())
+			if len(h.TagLeases) != 0 {
+				t.Fatal("expired lease remains")
+			}
+			if matched {
+				if h.Tickets[key] != ticket {
+					t.Fatal("matched report ticket was deleted")
+				}
+			} else {
+				if h.Tickets[key] != nil {
+					t.Fatal("waiting search remains without tag ownership")
+				}
+				select {
+				case <-changed:
+				default:
+					t.Fatal("waiting long polls were not notified")
+				}
+			}
+		})
 	}
 }
