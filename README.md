@@ -696,7 +696,7 @@ docker run -p 80:80 -p 443:443 -v antistatic-certs:/certs antistatic-server -aut
 
 Requires Go 1.26.5 or later.
 
-On the standard infra-tools agent VM, select the Node 26+ release used by the
+On the standard Basaltwater agent VM, select the Node 26+ release used by the
 protocol tooling, install dependencies, and run the complete local gate:
 
 ```bash

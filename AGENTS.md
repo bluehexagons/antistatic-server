@@ -9,7 +9,7 @@ from the Antistatic-specific files prefixed with `antistatic_`.
 
 ## Environment and commands
 
-The standard Linux host is an infra-tools-managed agent VM with Go, Node, a C
+The standard Linux host is a Basaltwater-managed agent VM with Go, Node, a C
 compiler for race tests, and related repositories below `~/repos`. This
 repository's protocol tooling requires Node 26.4+; run `nvm use` from the
 checkout before npm commands so `.nvmrc` selects the newest installed release.
@@ -21,7 +21,7 @@ checkout before npm commands so `.nvmrc` selects the newest installed release.
 - `npm run generate`: regenerate declarations after an intentional OpenAPI
   contract change.
 
-Use `infra-tools agent doctor --capability development --json` only when the
+Use `basaltw agent doctor --capability development --json` only when the
 managed Go or Node layer is suspect. Keep local data, logs, reports, and other
 task evidence under ignored `local-artifacts/`; never commit credentials or
 real report contents.
