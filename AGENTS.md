@@ -12,7 +12,9 @@ from the Antistatic-specific files prefixed with `antistatic_`.
 The standard Linux host is a Basaltwater-managed agent VM with Go, Node, a C
 compiler for race tests, and related repositories below `~/repos`. This
 repository's protocol tooling requires Node 26.4+; run `nvm use` from the
-checkout before npm commands so `.nvmrc` selects the newest installed release.
+checkout before npm commands so `.nvmrc` selects the development major.
+On Basaltwater, `basaltw node exec -- npm run check` selects it without changing
+the host default; `basaltw node install` installs a missing pin.
 
 - `npm ci`: install protocol-tooling dependencies.
 - `./scripts/check.sh`: run the complete local/release verification gate.
