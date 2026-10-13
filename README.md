@@ -694,7 +694,14 @@ docker run -p 80:80 -p 443:443 -v antistatic-certs:/certs antistatic-server -aut
 
 ## Building
 
-Requires Go 1.26.5 or later.
+The included `basaltwater.json` deploys a loopback HTTP service on an automatic
+port, checks `/health`, and persists reports in the managed service data directory.
+Its STUN listener is disabled so it can share the responder from the
+`release/antistatic-0.9.125` maintenance branch on the same host. That branch
+preserves the released client's older protocol and publishes separate v0.9.x
+server releases.
+
+Requires Go 1.27 or later.
 
 On the standard Basaltwater agent VM, select the Node 26+ release used by the
 protocol tooling, install dependencies, and run the complete local gate:
