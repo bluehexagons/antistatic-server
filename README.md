@@ -9,9 +9,11 @@ use v0.9.x tags; main supports the development client protocol separately.
 Maintenance releases are not marked as GitHub's latest release.
 
 The included `basaltwater.json` builds a loopback HTTP service with an automatic
-port and health check. It enables one public STUN listener on 3478/udp; open that
-port in the host and provider firewalls and point a DNS-only STUN hostname at the
-server. Other server instances must disable their STUN listener to share this
+port and health check. It enables one public STUN listener on 3478/udp and
+declares its host firewall allowance through `public_udp`. Both client release
+lines default to `stun.antistaticgame.com:3478`; point that DNS-only A/AAAA record
+at the server and allow 3478/udp in the provider firewall.
+Other server instances must disable their STUN listener to share this
 responder without a port conflict. HTTP can use a Cloudflare tunnel.
 
 ## Features
