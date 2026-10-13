@@ -282,26 +282,42 @@ func getClientIP(r *http.Request) string {
 	}
 
 	if trustProxy && isTrustedProxy(remote) {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			ip := xff
-			if idx := strings.Index(xff, ","); idx != -1 {
-				ip = strings.TrimSpace(xff[:idx])
-			}
-			if parsed := net.ParseIP(ip); parsed != nil {
-				return parsed.String()
-			}
+		forwardedValues := r.Header.Values("X-Forwarded-For")
+		realValues := r.Header.Values("X-Real-IP")
+		forwarded := forwardedClientIP(forwardedValues)
+		real := forwardedClientIP(realValues)
+		if (len(forwardedValues) > 0 && forwarded == "") || (len(realValues) > 0 && real == "") {
 			return ""
 		}
-
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			if parsed := net.ParseIP(xri); parsed != nil {
-				return parsed.String()
-			}
+		if forwarded != "" && real != "" && real != forwarded {
 			return ""
 		}
+		if forwarded != "" {
+			return forwarded
+		}
+		if real != "" {
+			return real
+		}
+		// A proxy's address must not group unrelated players into one identity.
+		return ""
 	}
 
 	return remote
+}
+
+func forwardedClientIP(values []string) string {
+	if len(values) != 1 {
+		return ""
+	}
+	value := strings.TrimSpace(values[0])
+	if value == "" || strings.Contains(value, ",") {
+		return ""
+	}
+	parsed := net.ParseIP(value)
+	if parsed == nil {
+		return ""
+	}
+	return parsed.String()
 }
 
 func maxBytes(n int64) func(http.Handler) http.Handler {

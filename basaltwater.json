@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "components": [
+    {
+      "name": "server",
+      "type": "service",
+      "domain": "{{domain}}",
+      "build": "mkdir -p .basaltwater/bin && CGO_ENABLED=0 go build -trimpath -ldflags=\"-s -w -X main.buildVersion=$(git describe --tags --always --match 'v[0-9]*')\" -o .basaltwater/bin/antistatic-server .",
+      "exec": "{{release_dir}}/.basaltwater/bin/antistatic-server -host 127.0.0.1 -port {{port}} -trust-proxy -trusted-proxy-cidrs 127.0.0.1/32,::1/128 -stun-port 3478",
+      "port": "auto",
+      "runtime_env": {
+        "ANTISTATIC_DATA_DIR": "{{data_dir}}"
+      },
+      "health": "/health"
+    }
+  ]
+}

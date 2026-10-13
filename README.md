@@ -3,6 +3,17 @@ Lobby coordination server for [Antistatic](https://antistaticgame.com/), the unc
 
 Built on [bluehexagons/gomoose](https://github.com/bluehexagons/gomoose)
 
+This maintenance branch, `release/antistatic-0.9.125`, starts from server v0.9.2
+and preserves the protocol shipped with Antistatic v0.9.125. Its server releases
+use v0.9.x tags; main supports the development client protocol separately.
+Maintenance releases are not marked as GitHub's latest release.
+
+The included `basaltwater.json` builds a loopback HTTP service with an automatic
+port and health check. It enables one public STUN listener on 3478/udp; open that
+port in the host and provider firewalls and point a DNS-only STUN hostname at the
+server. Other server instances must disable their STUN listener to share this
+responder without a port conflict. HTTP can use a Cloudflare tunnel.
+
 ## Features
 - IPv4 and IPv6 support
 - Keyed lobby and random matchmaking endpoints
@@ -90,6 +101,9 @@ attack surface as the existing HTTP listener.
 
 For example, when nginx runs on the same host and proxies to the Go server over loopback, use `-trust-proxy -trusted-proxy-cidrs 127.0.0.1/32`.
 If nginx connects over IPv6 loopback, include `::1/128` as well.
+Trusted proxies must supply one valid client IP in `X-Real-IP` or
+`X-Forwarded-For`; chains, duplicate headers, missing headers, and conflicting
+identities are rejected. Local health probes can send `X-Real-IP: 127.0.0.1`.
 
 Quick command to generate a self-signed certificate:
 ```bash
@@ -237,7 +251,7 @@ docker run -p 8080:8080 antistatic-server -port 8080 -tls -autocert example.com
 ```
 
 ## Building
-Requires Go 1.24 or later.
+Requires Go 1.27 or later.
 
 ```bash
 go build -o antistatic-server .
