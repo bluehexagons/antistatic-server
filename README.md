@@ -701,7 +701,7 @@ Its STUN listener is disabled so it can share the responder from the
 preserves the released client's older protocol and publishes separate v0.9.x
 server releases.
 
-Requires Go 1.27 or later.
+Requires Go 1.27.2 or later, including the October 2026 security fixes.
 
 On the standard Basaltwater agent VM, select the Node 26+ release used by the
 protocol tooling, install dependencies, and run the complete local gate:
