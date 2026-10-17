@@ -728,8 +728,14 @@ CGO_ENABLED=0 go build -o antistatic-server .
 
 ## Testing
 
-Run Go tests with:
+Run Go tests with concise package summaries and failure details:
 
 ```bash
-go test -v ./...
+go test -race -p 2 -parallel 2 -timeout 2m ./...
 ```
+
+The complete gate uses the same limits: two package workers, at most two
+parallel tests per package, and a two-minute timeout for each package. For
+additional context, add `-count=1 -v -run '^TestName$'` to rerun the failing
+test without the result cache. Use `-json` and redirect to ignored
+`local-artifacts/tests.json` when retaining events and durations for analysis.
