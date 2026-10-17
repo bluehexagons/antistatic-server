@@ -27,8 +27,8 @@
     "lint:fix": "oxlint scripts protocol/typecheck.ts --fix --deny-warnings"
   },
   "devDependencies": {
-    "oxfmt": "^0.70.0",
-    "oxlint": "^1.85.0",
+    "oxfmt": "^0.73.0",
+    "oxlint": "^1.88.0",
     "typescript": "^7.0.2"
   },
   "engines": {
