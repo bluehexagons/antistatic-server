@@ -4,3 +4,6 @@
 .env
 cert.crt
 cert.key
+local-artifacts
+node_modules
+*.tgz

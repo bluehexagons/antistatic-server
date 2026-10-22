@@ -253,7 +253,7 @@ docker run -p 8080:8080 antistatic-server -port 8080 -tls -autocert example.com
 ```
 
 ## Building
-Requires Go 1.27.2 or later, including the October 2026 security fixes.
+Requires Go 1.27.3 or later, including the October 2026 security fixes.
 
 ```bash
 go build -o antistatic-server .
