@@ -137,15 +137,27 @@ When a capacity limit is reached, new state-creating requests return `503 Servic
 
 ### Environment variables
 
-| Variable                    | Description                                                                                         |
-| --------------------------- | --------------------------------------------------------------------------------------------------- |
-| `ANTISTATIC_DATA_DIR`       | Directory for the append-only report JSON Lines files. When unset, collection endpoints return 503. |
-| `ANTISTATIC_ADMIN_USERNAME` | HTTP Basic username for `/admin/`. Must be set with the password.                                   |
-| `ANTISTATIC_ADMIN_PASSWORD` | HTTP Basic password for `/admin/`. Must be set with the username.                                   |
+| Variable                      | Description                                                                                         |
+| ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| `ANTISTATIC_DATA_DIR`         | Directory for the append-only report JSON Lines files. When unset, collection endpoints return 503. |
+| `ANTISTATIC_ADMIN_USERNAME`   | HTTP Basic username for `/admin/`. Must be set with the password.                                   |
+| `ANTISTATIC_ADMIN_PASSWORD`   | HTTP Basic password for `/admin/`. Must be set with the username.                                   |
+| `ANTISTATIC_SECURITY_CONTACT` | Security disclosure contact as a `mailto:` address or HTTPS URL. Must be set with an expiry.        |
+| `ANTISTATIC_SECURITY_EXPIRES` | RFC 3339 expiry for `security.txt`, such as `2027-04-01T00:00:00Z`. Must be set with a contact.     |
 
 If exactly one admin credential is set, startup fails. If both are unset, admin
 routes are not registered and return 404. Admin pages can still be enabled when
 the data directory is unset; they show storage as unavailable.
+
+Security disclosure is opt-in deployment configuration. With both security
+variables unset, `/security.txt` and `/.well-known/security.txt` return 404.
+When enabled, the canonical file contains `Contact` and `Expires` fields, and
+the legacy root path redirects to `/.well-known/security.txt`. Both require
+HTTPS, including the existing trusted-proxy TLS checks. Invalid contacts,
+missing paired values, and past expiry dates fail startup. Choose an expiry
+less than a year ahead and renew the configuration and restart before it
+expires. Once expired, both paths return 404. Responses are not cached, so a
+cached document or redirect cannot outlive its configured expiry.
 
 ### Examples
 
@@ -207,20 +219,36 @@ fixtures, type-checks and lints the tooling, checks Oxfmt formatting, and fails
 if the generated file is stale. The package intentionally adds no runtime
 validation or handler generation to the server.
 
-| Method   | Endpoint                               | Description                                                                            |
-| -------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
-| `GET`    | `/health`                              | JSON health check with live counts, split HTTP/game error logs, and aggregate activity |
-| `GET`    | `/health.html`                         | Human-readable HTML health view with the same data                                     |
-| `GET`    | `/events`                              | Upcoming recurring community queue events                                              |
-| `PUT`    | `/api/v1/lobbies/{key}`                | Register/update a lobby member                                                         |
-| `DELETE` | `/api/v1/lobbies/{key}`                | Remove a lobby member                                                                  |
-| `PUT`    | `/api/v1/matchmaking/{ticket}`         | Register, refresh, or long-poll a matchmaking ticket                                   |
-| `DELETE` | `/api/v1/matchmaking/{ticket}`         | Cancel a matchmaking ticket                                                            |
-| `POST`   | `/api/v1/matchmaking/{ticket}/outcome` | Submit an authenticated coarse game outcome                                            |
-| `POST`   | `/api/v1/reports/crash`                | Submit a crash report                                                                  |
-| `POST`   | `/api/v1/reports/feedback`             | Submit feedback                                                                        |
-| `POST`   | `/api/v1/metrics/gameplay`             | Submit a coarse gameplay sample                                                        |
-| `POST`   | `/api/v1/metrics/performance`          | Submit a coarse performance sample                                                     |
+| Method        | Endpoint                               | Description                                                                            |
+| ------------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
+| `GET`, `HEAD` | `/`                                    | Small landing page linking to the homepage, Steam, and itch.io                         |
+| `GET`, `HEAD` | `/favicon.ico`                         | Bundled Antistatic PNG icon                                                            |
+| `GET`, `HEAD` | `/robots.txt`                          | Disallow service crawling while allowing the landing page's noindex to be read         |
+| `GET`, `HEAD` | `/.well-known/security.txt`            | Optional operator-configured security disclosure contact and expiry                    |
+| `GET`, `HEAD` | `/security.txt`                        | Temporary redirect to the canonical security file when configured                      |
+| `GET`         | `/health`                              | JSON health check with live counts, split HTTP/game error logs, and aggregate activity |
+| `GET`         | `/health.html`                         | Human-readable HTML health view with the same data                                     |
+| `GET`         | `/events`                              | Upcoming recurring community queue events                                              |
+| `PUT`         | `/api/v1/lobbies/{key}`                | Register/update a lobby member                                                         |
+| `DELETE`      | `/api/v1/lobbies/{key}`                | Remove a lobby member                                                                  |
+| `PUT`         | `/api/v1/matchmaking/{ticket}`         | Register, refresh, or long-poll a matchmaking ticket                                   |
+| `DELETE`      | `/api/v1/matchmaking/{ticket}`         | Cancel a matchmaking ticket                                                            |
+| `POST`        | `/api/v1/matchmaking/{ticket}/outcome` | Submit an authenticated coarse game outcome                                            |
+| `POST`        | `/api/v1/reports/crash`                | Submit a crash report                                                                  |
+| `POST`        | `/api/v1/reports/feedback`             | Submit feedback                                                                        |
+| `POST`        | `/api/v1/metrics/gameplay`             | Submit a coarse gameplay sample                                                        |
+| `POST`        | `/api/v1/metrics/performance`          | Submit a coarse performance sample                                                     |
+
+The landing page does not link to operational pages. Service responses carry
+`X-Robots-Tag: noindex, nofollow`; the landing page also includes the matching
+robots meta tag. `/robots.txt` disallows service crawling except the exact root
+page, so crawlers can read its noindex directive. These are voluntary crawler
+directives, not access controls.
+
+The landing page, stylesheet (`/site.css`), and icon are embedded in the binary
+and need no runtime asset directory. The icon is copied from Antistatic's
+`app/icons/icon.png`. Forks should replace the branding and links through
+`antistatic_public.go` and the `public/antistatic.*` assets.
 
 ### Report collection API
 

@@ -13,6 +13,7 @@ type applicationConfig struct {
 	AdminUsername string
 	AdminPassword string
 	Game          Config
+	Security      securityTextConfig
 }
 
 type application struct {
@@ -37,6 +38,11 @@ func applicationConfigFromEnv(game Config) (applicationConfig, error) {
 	if (config.AdminUsername == "") != (config.AdminPassword == "") {
 		return applicationConfig{}, errors.New("ANTISTATIC_ADMIN_USERNAME and ANTISTATIC_ADMIN_PASSWORD must both be set")
 	}
+	security, err := parseSecurityTextConfig(os.Getenv("ANTISTATIC_SECURITY_CONTACT"), os.Getenv("ANTISTATIC_SECURITY_EXPIRES"))
+	if err != nil {
+		return applicationConfig{}, err
+	}
+	config.Security = security
 	if dataDir := strings.TrimSpace(os.Getenv("ANTISTATIC_DATA_DIR")); dataDir != "" {
 		store, err := newReportStoreForFeatures(dataDir, game.Features)
 		if err != nil {
@@ -60,6 +66,9 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*appl
 	if err := validateConfig(config.Game); err != nil {
 		return nil, err
 	}
+	if err := config.Security.validate(time.Now()); err != nil {
+		return nil, err
+	}
 	lobby.Config = config.Game
 	lobby.Store = config.Store
 	if config.Store != nil {
@@ -68,6 +77,9 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*appl
 	reportLimiter := newRateLimiter(10, 20, time.Minute)
 	api := reportAPI{store: config.Store, limiter: reportLimiter, config: config.Game}
 	mux := http.NewServeMux()
+	registerAntistaticPublicRoutes(mux)
+	mux.HandleFunc("/.well-known/security.txt", config.Security.serveHTTP)
+	mux.HandleFunc("/security.txt", config.Security.serveHTTP)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { serveHealth(lobby, w, r) })
 	mux.HandleFunc("/health.html", func(w http.ResponseWriter, r *http.Request) { serveHealthHTML(lobby, w, r) })
 	if config.Game.Features.Events {

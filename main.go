@@ -155,13 +155,6 @@ func serveHealthHTML(lobby *lobbyHandler, w http.ResponseWriter, r *http.Request
 	}
 }
 
-func robotsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("User-agent: *\nDisallow: /\n"))
-}
-
 func main() {
 	slogLevel := &slog.LevelVar{}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{

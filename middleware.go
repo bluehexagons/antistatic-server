@@ -73,7 +73,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		adminRequest := r.URL.Path == "/admin" || strings.HasPrefix(r.URL.Path, "/admin/")
 		if !adminRequest && !isIngestionPath(r.URL.Path) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, DELETE, OPTIONS")
 			w.Header().Set(
 				"Access-Control-Allow-Headers",
 				"Authorization, Content-Type, X-Request-ID",
@@ -83,8 +83,12 @@ func securityHeaders(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 		if adminRequest {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+		} else if r.URL.Path == "/" {
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 		} else {
 			w.Header().Set("Content-Security-Policy", "default-src 'none'")
 		}

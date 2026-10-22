@@ -31,6 +31,7 @@ The main source-level customization points are:
 | `antistatic_matchmaking.go` | Typed ticket metadata, metadata validation, compatible-ticket selection, and participant role assignment |
 | `antistatic_reports.go`     | Game-specific gameplay metric request, validation, and ingestion                                         |
 | `antistatic_admin.go`       | Game-specific retained gameplay record presentation                                                      |
+| `antistatic_public.go`      | Landing-page assets, game homepage/store links, and icon under `public/antistatic.*`                     |
 | `admin.go`                  | Generic report navigation plus crash, feedback, performance, and outcome presentation                    |
 | `store.go`                  | Persisted record shapes, retention, deduplication, and collection registration                           |
 
