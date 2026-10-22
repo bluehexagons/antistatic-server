@@ -39,17 +39,15 @@ var stunHost = ""
 var stunPort = 0
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
-	resp, _ := json.Marshal(handler.healthResponse())
+	serveHealth(handler, w, r)
+}
+
+func serveHealth(lobby *lobbyHandler, w http.ResponseWriter, r *http.Request) {
+	resp, _ := json.Marshal(lobby.healthResponse())
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(resp)
-}
-
-func robotsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("User-agent: *\nDisallow: /\n"))
 }
 
 func main() {
@@ -81,6 +79,16 @@ func main() {
 		slog.Error("Invalid trusted proxy CIDRs", "error", err)
 		os.Exit(2)
 	}
+	security, err := securityTextConfigFromEnv()
+	if err != nil {
+		slog.Error("Invalid security disclosure configuration", "error", err)
+		os.Exit(2)
+	}
+	mux, err := newApplicationHandler(security, handler)
+	if err != nil {
+		slog.Error("Failed to construct application handler", "error", err)
+		os.Exit(2)
+	}
 
 	if tlsPort <= 0 && useTLS {
 		tlsPort = 443
@@ -96,11 +104,6 @@ func main() {
 	defer stop()
 
 	var wg sync.WaitGroup
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/robots.txt", robotsHandler)
-	mux.Handle("/", handler)
-
 	var mgr *autocert.Manager
 	if autocertDomain != "" {
 		mgr = &autocert.Manager{

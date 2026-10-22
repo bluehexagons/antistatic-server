@@ -73,6 +73,25 @@ To keep memory and CPU bounded under abusive traffic, the server enforces fixed 
 
 When a capacity limit is reached, new state-creating requests return `503 Service Unavailable`; existing tickets and lobby members can continue to refresh until they expire or are deleted.
 
+### Security disclosure configuration
+
+Security disclosure is optional deployment configuration:
+
+- `ANTISTATIC_SECURITY_CONTACT`: a `mailto:` address or HTTPS contact URL.
+- `ANTISTATIC_SECURITY_EXPIRES`: an RFC 3339 expiry, such as `2027-04-01T00:00:00Z`.
+
+Set both variables to enable `/.well-known/security.txt`, which publishes
+`Contact` and `Expires` fields. `/security.txt` temporarily redirects to that
+canonical path. With both variables unset, both paths return 404. Invalid
+contacts, missing paired values, and past expiry dates fail startup.
+
+Both paths require HTTPS. A TLS-terminating proxy must be covered by
+`-trust-proxy` and `-trusted-proxy-cidrs` and overwrite `X-Forwarded-Proto` with
+its own TLS state; client-supplied headers from other peers are not trusted.
+Choose an expiry less than a year ahead and renew the configuration and restart
+before it expires. Expired files return 404, and security disclosure responses
+are not cached.
+
 ### Examples
 * `antistatic-server -tls -cert /etc/tls/server.crt -key /etc/tls/server.key` - Custom cert/key locations
 * `antistatic-server -tls -nohttp` - HTTPS only, no HTTP
@@ -116,6 +135,11 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `GET`, `HEAD` | `/` | Landing page linking to the homepage, Steam, and itch.io |
+| `GET`, `HEAD` | `/favicon.ico` | Bundled Antistatic PNG icon |
+| `GET`, `HEAD` | `/robots.txt` | Disallow service crawling while allowing the root page's noindex to be read |
+| `GET`, `HEAD` | `/.well-known/security.txt` | Optional operator-configured security contact and expiry |
+| `GET`, `HEAD` | `/security.txt` | Temporary redirect to the canonical security file when configured |
 | `GET` | `/health` | Health check (returns status, live counts, startup lobby creation total, successful game estimate, error count, version) |
 | `PUT` | `/{version}/lobby/{key}/{port}` | Register/update a lobby member |
 | `DELETE` | `/{version}/lobby/{key}/{port}` | Remove a lobby member |
@@ -123,6 +147,19 @@ openssl req -newkey rsa:2048 -nodes -keyout cert.key -x509 -days 36525 -out cert
 | `PUT` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Register or refresh a matchmaking ticket |
 | `GET` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Poll matchmaking ticket status |
 | `DELETE` | `/{version}/matchmaking/{queue}/{ticket}/{port}` | Cancel a matchmaking ticket |
+
+The landing page does not link to health or other operational pages. Service
+responses carry `X-Robots-Tag: noindex, nofollow` and
+`Referrer-Policy: no-referrer`; the landing page also includes the matching
+robots meta tag. `/robots.txt` disallows service crawling except the exact root
+page so crawlers can read its noindex directive. These voluntary crawler
+directives are not access controls. Health responses are not cached.
+
+The landing page, stylesheet (`/site.css`), and icon are embedded in the binary
+and need no runtime asset directory. The icon is copied from Antistatic's
+`app/icons/icon.png`. Branding and store links live in `public/antistatic.*`,
+registered by `antistatic_public.go`. These public routes do not change the
+released client's versioned lobby or matchmaking API.
 
 Lobby and matchmaking ownership is protected with an `X-Antistatic-Token` header. The first successful `PUT` for a lobby member or matchmaking ticket returns a `token`; clients must send that token in `X-Antistatic-Token` when refreshing, polling, or deleting the same member/ticket. Tokens are bearer credentials and should not be logged or shared.
 
@@ -265,7 +302,13 @@ CGO_ENABLED=0 go build -o antistatic-server .
 ```
 
 ## Testing
-Run tests with:
+Run the complete verification gate before pushing:
+```bash
+./scripts/check.sh
+```
+
+The gate runs Go race tests, vet, and a CGO-disabled build. For a focused loop,
+run tests with:
 ```bash
 go test -v ./...
 ```

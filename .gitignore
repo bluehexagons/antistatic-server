@@ -34,4 +34,5 @@ go.work
 Thumbs.db
 
 .codex
+local-artifacts/
 .basaltwater/

@@ -131,6 +131,12 @@ func TestSecurityHeaders(t *testing.T) {
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Error("X-Content-Type-Options header not set")
 	}
+	if rec.Header().Get("X-Robots-Tag") != "noindex, nofollow" {
+		t.Error("X-Robots-Tag must discourage indexing service responses")
+	}
+	if rec.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Error("Referrer-Policy must omit the service URL from outgoing links")
+	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, antistaticTokenHeader) {
 		t.Errorf("Access-Control-Allow-Headers = %q, want %s", got, antistaticTokenHeader)
 	}
