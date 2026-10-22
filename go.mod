@@ -1,6 +1,6 @@
 module github.com/bluehexagons/antistatic-server
 
-go 1.27.2
+go 1.27.3
 
 require golang.org/x/crypto v0.58.0
 
