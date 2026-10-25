@@ -201,3 +201,29 @@ func TestGenerationRetentionBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestActiveCodeGenerationSurvivesLeaseRenewal(t *testing.T) {
+	h := newTestLobbyHandler()
+	h.Config.Timeouts.MatchmakingTagLease = ConfigDuration(time.Second)
+	now := time.Now()
+	tags := &matchmakingTagPair{Self: "ALPHA1", Peer: "BRAVO2", SelfToken: "code-proof"}
+	first, status := registerGeneration(h, "First", "code.alpha1-bravo2", "", "", tags, now)
+	if status != http.StatusOK {
+		t.Fatal(status)
+	}
+	peerTags := &matchmakingTagPair{Self: "BRAVO2", Peer: "ALPHA1", SelfToken: "peer-proof"}
+	if _, status := h.refreshOrCreateMatchmakingTicketLocked("Peer", "0.9.5", "0.9.5", "code.alpha1-bravo2", "198.51.100.20", 45861, matchmakingMetadata{Character: "Silicon"}, "", peerTags, nil, nil, "", now); status != http.StatusOK {
+		t.Fatal(status)
+	}
+	later := now.Add(2 * time.Second)
+	// The introduction remains live after a short configured lease expires.
+	if _, status := registerGeneration(h, "First", "code.alpha1-bravo2", first.Token, "", tags, later); status != http.StatusOK {
+		t.Fatalf("bearer renewal: %d", status)
+	}
+	if _, status := h.cancelMatchmakingLocked("0.9.5", "code.alpha1-bravo2", "First", "", tags, "", later); status != http.StatusOK {
+		t.Fatalf("renewed proof cancellation: %d", status)
+	}
+	if _, status := registerGeneration(h, "First", "code.alpha1-bravo2", "", "", tags, later); status != http.StatusConflict {
+		t.Fatalf("renewed generation replay: %d", status)
+	}
+}

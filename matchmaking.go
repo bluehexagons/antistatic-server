@@ -614,6 +614,9 @@ func (h *lobbyHandler) refreshMatchmakingTagLeaseLocked(ticket *MatchmakingTicke
 	)
 	if status == http.StatusOK {
 		ticket.TagToken = tagToken
+		if generation := h.Generations[ticket.generationKey]; generation != nil {
+			generation.Lease = h.TagLeases[leaseKey]
+		}
 	}
 	return status
 }
@@ -948,6 +951,11 @@ func (h *lobbyHandler) newMatchmakingGenerationLocked(version string, tags *matc
 
 func (h *lobbyHandler) cleanupMatchmakingGenerationsLocked(now time.Time) {
 	for key, generation := range h.Generations {
+		// A live ticket keeps its cancellation slot even if its lease expires.
+		// A bearer check-in may renew that lease while the match is still live.
+		if !generation.Canceled {
+			continue
+		}
 		if generation.Lease != nil {
 			if h.TagLeases[generation.LeaseKey] != generation.Lease || now.After(generation.Lease.CheckedIn.Add(h.Config.Timeouts.MatchmakingTagLease.Duration())) {
 				delete(h.Generations, key)
