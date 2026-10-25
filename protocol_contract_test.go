@@ -193,6 +193,39 @@ func TestSharedProtocolRequestAndServiceFixtures(t *testing.T) {
 	}
 }
 
+func TestSharedOrdinaryRegistrationProofFixtures(t *testing.T) {
+	h := newTestLobbyHandler()
+	h.Config.Service.CompatibilityID = DefaultConfig().Service.CompatibilityID
+	put := protocolFixtureBytes(t, "valid/matchmaking-registration-request.json")
+	cancel := protocolFixtureBytes(t, "valid/matchmaking-registration-cancel-request.json")
+	request := func(method string, body []byte) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, apiPrefix+"/matchmaking/ProofTicket", bytes.NewReader(body))
+		r.RemoteAddr = "198.51.100.10:32000"
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	first := request(http.MethodPut, put)
+	if first.Code != http.StatusOK {
+		t.Fatalf("registration: %d %s", first.Code, first.Body.String())
+	}
+	// Discard the first response: retry and cancellation have only the proof.
+	recovered := request(http.MethodPut, put)
+	if recovered.Code != http.StatusOK || decodeMatchmakingResponse(t, first).Token != decodeMatchmakingResponse(t, recovered).Token {
+		t.Fatal("proof recovery failed")
+	}
+	if deleted := request(http.MethodDelete, cancel); deleted.Code != http.StatusOK || len(h.Tickets) != 0 {
+		t.Fatalf("proof cancellation: %d", deleted.Code)
+	}
+	if replay := request(http.MethodPut, put); replay.Code != http.StatusConflict {
+		t.Fatalf("canceled replay: %d", replay.Code)
+	}
+	if invalid := request(http.MethodPut, protocolFixtureBytes(t, "invalid/matchmaking-registration-request-long-proof.json")); invalid.Code != http.StatusBadRequest {
+		t.Fatalf("oversized proof: %d", invalid.Code)
+	}
+}
+
 func TestOpenAPIAntistaticCompatibilityIDMatchesDefault(t *testing.T) {
 	var document struct {
 		Components struct {

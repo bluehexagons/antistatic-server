@@ -60,7 +60,7 @@
       },
       "delete": {
         "operationId": "cancelMatchmakingTicket",
-        "security": [{ "bearerAuth": [] }],
+        "security": [{}, { "bearerAuth": [] }],
         "requestBody": { "$ref": "#/components/requestBodies/MatchmakingCancel" },
         "responses": {
           "200": { "$ref": "#/components/responses/Matchmaking" },
@@ -70,7 +70,8 @@
           "413": { "$ref": "#/components/responses/PlainError" },
           "415": { "$ref": "#/components/responses/PlainError" },
           "426": { "$ref": "#/components/responses/IncompatibleClient" },
-          "429": { "$ref": "#/components/responses/PlainError" }
+          "429": { "$ref": "#/components/responses/PlainError" },
+          "503": { "$ref": "#/components/responses/PlainError" }
         }
       }
     },
@@ -324,6 +325,10 @@
           "self_tag_token": { "type": "string", "maxLength": 512, "description": "Secret proving ownership of self_tag. Persist a random 256-bit token before the first PUT; a new lease retains it. With no ticket bearer token, the same secret and reciprocal tag claim can recover or cancel that lease's ticket after a lost response. Omit to request a server-generated lease token." }
         }
       },
+      "MatchmakingRegistrationToken": {
+        "type": "string", "maxLength": 512,
+        "description": "Optional client-generated 256-bit secret for ordinary matchmaking. Generate before the first PUT and reuse only for this service, compatibility ID, queue and ticket. With no bearer, the proof recovers the original ticket or authorizes DELETE after a lost response. A supplied wrong bearer never falls back to proof. Match by Code instead requires its current unexpired code lease proof. Canceled ordinary generations reject replay for the configured report-retention window; code generations remain protected through that lease incarnation. Protection is in-memory and ends on server restart."
+      },
       "MatchmakingRequest": {
         "unevaluatedProperties": false,
         "allOf": [
@@ -337,7 +342,8 @@
               "metadata": { "$ref": "#/components/schemas/AntistaticMatchmakingMetadata" },
               "local_ips": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 64 } },
               "local_endpoints": { "type": "array", "maxItems": 8, "items": { "$ref": "#/components/schemas/Endpoint" } },
-              "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" }
+              "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" },
+              "registration_token": { "$ref": "#/components/schemas/MatchmakingRegistrationToken" }
             }
           }
         ]
@@ -346,7 +352,7 @@
         "unevaluatedProperties": false,
         "allOf": [
           { "$ref": "#/components/schemas/ClientIdentity" },
-          { "type": "object", "required": ["queue"], "properties": { "queue": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" }, "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" } } }
+          { "type": "object", "required": ["queue"], "properties": { "queue": { "type": "string", "pattern": "^[A-Za-z0-9_.-]{1,64}$" }, "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" }, "registration_token": { "$ref": "#/components/schemas/MatchmakingRegistrationToken" } } }
         ]
       },
       "MatchmakingPeer": {

@@ -129,6 +129,9 @@ const fixtureCases = [
   ['LobbyResponse', 'invalid/lobby-response-missing-token.json', false],
   ['LobbyResponse', 'invalid/lobby-response-zero-port.json', false],
   ['MatchmakingRequest', 'valid/matchmaking-request.json', true],
+  ['MatchmakingRequest', 'valid/matchmaking-registration-request.json', true],
+  ['MatchmakingRequest', 'invalid/matchmaking-registration-request-long-proof.json', false],
+  ['MatchmakingCancelRequest', 'valid/matchmaking-registration-cancel-request.json', true],
   ['MatchmakingRequest', 'invalid/matchmaking-request-extra-metadata.json', false],
   ['MatchmakingRequest', 'invalid/matchmaking-request-bad-match-code.json', false],
   ['MatchmakingCancelRequest', 'valid/matchmaking-cancel-request.json', true],
@@ -170,3 +173,15 @@ for (const path of [
     `${path} must document both upgrade-required representations`,
   );
 }
+
+const cancellation = document.paths['/api/v1/matchmaking/{ticket}'].delete;
+assert.deepEqual(
+  cancellation.security,
+  [{}, { bearerAuth: [] }],
+  'cancellation permits proof-only ownership',
+);
+assert.equal(
+  cancellation.responses['503'].$ref,
+  '#/components/responses/PlainError',
+  'cancellation documents bounded generation admission',
+);

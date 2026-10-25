@@ -48,6 +48,26 @@ The proof must still own the lease's current ticket. A new ticket with that
 proof replaces its previous waiting search. Omitting the proof requests a
 server-generated tag token, which must be retained from the response.
 
+For ordinary queues, generate a separate random 256-bit `registration_token`
+before the first PUT. Reuse it with the same service, compatibility ID, queue,
+and ticket for retries and DELETE. It recovers the original bearer after a lost
+response, including after matching or peer cancellation. A wrong supplied bearer
+never falls back to either ownership proof. Outcome reports remain bearer-only.
+The field is additive and optional; clients omitting it cannot recover a lost
+ordinary registration response. The compatibility ID therefore stays unchanged.
+
+Every proof-bearing registration reserves bounded replay-protection capacity.
+DELETE and waiting-search replacement retire that generation before detaching
+its lease. Delayed PUTs return 409 without recreating it; intentional searches
+use a new ticket ID. DELETE arriving before PUT also fences that generation.
+Ordinary protection lasts the configured report-retention duration after
+retirement. Code protection follows the particular lease incarnation through
+renewals until expiry or replacement. An absent code DELETE without a current
+matching lease is protected for one tag-lease duration. Repeated DELETE does not
+extend protection. At capacity new admissions return 503 without evicting
+protected generations; cancellation of admitted tickets still succeeds.
+This history is in memory: protection ends after its window or server restart.
+
 Report and metric routes use status `426` for two early admission failures.
 An incompatible client receives the structured `APIErrorResponse` JSON body;
 an insecure non-loopback request receives a plaintext HTTPS-required error.

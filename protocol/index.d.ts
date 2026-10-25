@@ -75,6 +75,8 @@ export type MatchCodeClaim = {
   self_tag_token?: string;
 };
 
+export type MatchmakingRegistrationToken = string;
+
 export type MatchmakingRequest = ClientIdentity & {
   queue: string;
   port: number;
@@ -82,11 +84,13 @@ export type MatchmakingRequest = ClientIdentity & {
   local_ips?: string[];
   local_endpoints?: Endpoint[];
   match_code?: MatchCodeClaim;
+  registration_token?: MatchmakingRegistrationToken;
 };
 
 export type MatchmakingCancelRequest = ClientIdentity & {
   queue: string;
   match_code?: MatchCodeClaim;
+  registration_token?: MatchmakingRegistrationToken;
 };
 
 export type MatchmakingPeer = LobbyMember & {

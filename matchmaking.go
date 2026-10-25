@@ -16,6 +16,7 @@ const maxMatchmakingTickets = 20000
 // Preserve room for active searches while bounding tickets kept for reports.
 // When full, new registrations evict the oldest report-only ticket.
 const maxStoredMatchmakingTickets = 2 * maxMatchmakingTickets
+const maxMatchmakingGenerations = 2 * maxStoredMatchmakingTickets
 const maxMatchmakingMatches = 10000
 const maxMatchmakingQueues = 10000
 const maxMatchmakingTagLeases = maxMatchmakingTickets
@@ -29,26 +30,38 @@ const matchCodeQueuePrefix = "code."
 const maxMatchmakingLongPoll = 10 * time.Second
 
 type MatchmakingTicket struct {
-	ID             string              `json:"id"`
-	Version        string              `json:"version"`
-	ClientVersion  string              `json:"client_version"`
-	Queue          string              `json:"queue"`
-	Endpoints      []Endpoint          `json:"endpoints"`
-	Token          string              `json:"-"`
-	TagToken       string              `json:"-"`
-	SelfTag        string              `json:"-"`
-	PeerTag        string              `json:"-"`
-	Metadata       matchmakingMetadata `json:"metadata"`
-	LocalIPs       []string            `json:"local_ips,omitempty"`
-	LocalEndpoints []Endpoint          `json:"local_endpoints,omitempty"`
-	CreatedAt      time.Time           `json:"created_at"`
-	CheckedIn      time.Time           `json:"checked_in"`
-	MatchedID      string              `json:"matched_id"`
-	stateChanged   chan struct{}
-	changeNotified bool
-	reportedEvents uint8
-	reportIDs      [7]string
-	codeOwnership  [sha256.Size]byte
+	ID                    string              `json:"id"`
+	Version               string              `json:"version"`
+	ClientVersion         string              `json:"client_version"`
+	Queue                 string              `json:"queue"`
+	Endpoints             []Endpoint          `json:"endpoints"`
+	Token                 string              `json:"-"`
+	TagToken              string              `json:"-"`
+	SelfTag               string              `json:"-"`
+	PeerTag               string              `json:"-"`
+	Metadata              matchmakingMetadata `json:"metadata"`
+	LocalIPs              []string            `json:"local_ips,omitempty"`
+	LocalEndpoints        []Endpoint          `json:"local_endpoints,omitempty"`
+	CreatedAt             time.Time           `json:"created_at"`
+	CheckedIn             time.Time           `json:"checked_in"`
+	MatchedID             string              `json:"matched_id"`
+	stateChanged          chan struct{}
+	changeNotified        bool
+	reportedEvents        uint8
+	reportIDs             [7]string
+	codeOwnership         [sha256.Size]byte
+	registrationOwnership [sha256.Size]byte
+	generationKey         [sha256.Size]byte
+}
+
+// Admission reserves a slot so cancellation never needs to evict another
+// generation's replay protection. Code records follow the lease incarnation;
+// ordinary records expire a report-retention window after retirement.
+type matchmakingGeneration struct {
+	Canceled  bool
+	LeaseKey  string
+	Lease     *MatchmakingTagLease
+	ExpiresAt time.Time
 }
 
 type MatchmakingTagLease struct {
@@ -209,18 +222,20 @@ type matchmakingResponse struct {
 
 type matchmakingRequest struct {
 	clientIdentity
-	Queue          string              `json:"queue"`
-	Port           int                 `json:"port"`
-	Metadata       matchmakingMetadata `json:"metadata"`
-	LocalIPs       []string            `json:"local_ips,omitempty"`
-	LocalEndpoints []Endpoint          `json:"local_endpoints,omitempty"`
-	MatchCode      *matchmakingTagPair `json:"match_code,omitempty"`
+	Queue             string              `json:"queue"`
+	Port              int                 `json:"port"`
+	Metadata          matchmakingMetadata `json:"metadata"`
+	LocalIPs          []string            `json:"local_ips,omitempty"`
+	LocalEndpoints    []Endpoint          `json:"local_endpoints,omitempty"`
+	MatchCode         *matchmakingTagPair `json:"match_code,omitempty"`
+	RegistrationToken string              `json:"registration_token,omitempty"`
 }
 
 type matchmakingCancelRequest struct {
 	clientIdentity
-	Queue     string              `json:"queue"`
-	MatchCode *matchmakingTagPair `json:"match_code,omitempty"`
+	Queue             string              `json:"queue"`
+	MatchCode         *matchmakingTagPair `json:"match_code,omitempty"`
+	RegistrationToken string              `json:"registration_token,omitempty"`
 }
 
 type gameReportRequest struct {
@@ -407,7 +422,7 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 		if ticket.MatchedID != "" {
 			if _, ok := h.Matches[ticket.MatchedID]; !ok {
 				if now.After(ticket.CheckedIn.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())) {
-					h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
+					h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID, now)
 				}
 			}
 			continue
@@ -415,11 +430,12 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 
 		if !ticket.waiting(now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
 			h.recordQueueExpirationLocked(ticket, now)
-			h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
+			h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID, now)
 		}
 	}
 
 	h.cleanupMatchmakingTagLeasesLocked(now)
+	h.cleanupMatchmakingGenerationsLocked(now)
 }
 
 func (h *lobbyHandler) expireMatchLocked(matchID string, match *Match, now time.Time) bool {
@@ -444,7 +460,7 @@ func (h *lobbyHandler) cleanupMatchmakingTagLeasesLocked(now time.Time) {
 			// lifetime. Keep matched tickets for outcome-report retention.
 			if ticket := h.Tickets[lease.TicketKey]; lease.owns(ticket) && ticket.MatchedID == "" {
 				h.recordQueueExpirationLocked(ticket, now)
-				h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
+				h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID, now)
 			}
 			delete(h.TagLeases, key)
 		}
@@ -544,7 +560,7 @@ func (h *lobbyHandler) reserveMatchmakingTagLocked(version, tag, token, ticketKe
 		}
 		if existing.TicketKey != "" && existing.TicketKey != ticketKey {
 			if oldTicket := h.Tickets[existing.TicketKey]; existing.owns(oldTicket) && oldTicket.MatchedID == "" {
-				h.deleteTicketLocked(oldTicket.Version, oldTicket.Queue, oldTicket.ID)
+				h.deleteTicketLocked(oldTicket.Version, oldTicket.Queue, oldTicket.ID, now)
 			}
 		}
 		existing.TicketKey = ticketKey
@@ -602,12 +618,13 @@ func (h *lobbyHandler) refreshMatchmakingTagLeaseLocked(ticket *MatchmakingTicke
 	return status
 }
 
-func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, clientVersion, queue, ip string, port int, metadata matchmakingMetadata, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, now time.Time) (*matchmakingResponse, int) {
+func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, clientVersion, queue, ip string, port int, metadata matchmakingMetadata, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, registrationToken string, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	h.cleanupMatchmakingLocked(now)
 	key := matchmakingTicketKey(version, queue, ticketID)
+	generationKey := matchmakingGenerationKey(key, tags, registrationToken)
 	if existing, ok := h.Tickets[key]; ok {
-		if (token == "" || token != existing.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(existing, tags, now)) {
+		if (token == "" || token != existing.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(existing, tags, registrationToken, now)) {
 			return nil, http.StatusForbidden
 		}
 		if existing.MatchedID == "" && existing.Metadata != metadata {
@@ -664,8 +681,16 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	if token != "" {
 		return nil, http.StatusNotFound
 	}
+	if generation := h.Generations[generationKey]; generation != nil && generation.Canceled {
+		return nil, http.StatusConflict
+	}
 
 	if h.activeMatchmakingTicketCountLocked() >= maxMatchmakingTickets || len(h.Matches) >= maxMatchmakingMatches {
+		return nil, http.StatusServiceUnavailable
+	}
+	// Reserve replay-protection capacity before transferring a code lease or
+	// removing the preceding search. Legacy ordinary requests have no proof.
+	if (tags != nil || registrationToken != "") && len(h.Generations) >= maxMatchmakingGenerations {
 		return nil, http.StatusServiceUnavailable
 	}
 
@@ -680,7 +705,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		}
 		tags.SelfToken = tagToken
 	}
-	h.makeRoomForMatchmakingTicketLocked()
+	h.makeRoomForMatchmakingTicketLocked(now)
 
 	ticket := &MatchmakingTicket{
 		ID:             ticketID,
@@ -704,6 +729,13 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		ticket.SelfTag = tags.Self
 		ticket.PeerTag = tags.Peer
 		ticket.codeOwnership = matchmakingCodeOwnership(tags)
+	} else if registrationToken != "" {
+		ticket.registrationOwnership = matchmakingRegistrationOwnership(key, registrationToken)
+	}
+	generationKey = matchmakingGenerationKey(key, tags, registrationToken)
+	if generationKey != ([sha256.Size]byte{}) {
+		ticket.generationKey = generationKey
+		h.Generations[generationKey] = h.newMatchmakingGenerationLocked(version, tags, now)
 	}
 
 	match, other := h.findCompatibleMatchLocked(ticket, now)
@@ -852,7 +884,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
 			if h.expireMatchLocked(ticket.MatchedID, match, now) {
 				if now.After(ticket.CheckedIn.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())) {
-					h.deleteTicketLocked(version, queue, ticketID)
+					h.deleteTicketLocked(version, queue, ticketID, now)
 					return nil, http.StatusNotFound
 				}
 				return h.matchmakingTicketResponseLocked("canceled", ticket, now), http.StatusOK
@@ -862,7 +894,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 			return resp, http.StatusOK
 		}
 		if now.After(ticket.CheckedIn.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())) {
-			h.deleteTicketLocked(version, queue, ticketID)
+			h.deleteTicketLocked(version, queue, ticketID, now)
 			return nil, http.StatusNotFound
 		}
 		return h.matchmakingTicketResponseLocked("canceled", ticket, now), http.StatusOK
@@ -870,7 +902,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 
 	if !ticket.waiting(now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
 		h.recordQueueExpirationLocked(ticket, now)
-		h.deleteTicketLocked(version, queue, ticketID)
+		h.deleteTicketLocked(version, queue, ticketID, now)
 		return nil, http.StatusNotFound
 	}
 
@@ -883,7 +915,53 @@ func matchmakingCodeOwnership(tags *matchmakingTagPair) [sha256.Size]byte {
 	return sha256.Sum256([]byte(tags.Self + "|" + tags.Peer + "|" + tags.SelfToken))
 }
 
-func (h *lobbyHandler) canRecoverMatchmakingTicketLocked(ticket *MatchmakingTicket, tags *matchmakingTagPair, now time.Time) bool {
+func matchmakingRegistrationOwnership(ticketKey, proof string) [sha256.Size]byte {
+	return sha256.Sum256([]byte("ordinary-registration\x00" + ticketKey + "\x00" + proof))
+}
+
+func matchmakingGenerationKey(ticketKey string, tags *matchmakingTagPair, proof string) [sha256.Size]byte {
+	var ownership [sha256.Size]byte
+	if tags != nil && tags.SelfToken != "" {
+		ownership = matchmakingCodeOwnership(tags)
+	} else if tags == nil && proof != "" {
+		ownership = matchmakingRegistrationOwnership(ticketKey, proof)
+	} else {
+		return ownership
+	}
+	return sha256.Sum256(append([]byte("matchmaking-generation\x00"+ticketKey+"\x00"), ownership[:]...))
+}
+
+func (h *lobbyHandler) newMatchmakingGenerationLocked(version string, tags *matchmakingTagPair, now time.Time) *matchmakingGeneration {
+	generation := &matchmakingGeneration{}
+	if tags != nil {
+		generation.LeaseKey = matchmakingTagLeaseKey(version, tags.Self)
+		lease := h.TagLeases[generation.LeaseKey]
+		if lease != nil && lease.Token == tags.SelfToken && !now.After(lease.CheckedIn.Add(h.Config.Timeouts.MatchmakingTagLease.Duration())) {
+			generation.Lease = lease
+		} else {
+			// DELETE may arrive before the first PUT (and hence before a lease).
+			generation.ExpiresAt = now.Add(h.Config.Timeouts.MatchmakingTagLease.Duration())
+		}
+	}
+	return generation
+}
+
+func (h *lobbyHandler) cleanupMatchmakingGenerationsLocked(now time.Time) {
+	for key, generation := range h.Generations {
+		if generation.Lease != nil {
+			if h.TagLeases[generation.LeaseKey] != generation.Lease || now.After(generation.Lease.CheckedIn.Add(h.Config.Timeouts.MatchmakingTagLease.Duration())) {
+				delete(h.Generations, key)
+			}
+		} else if !generation.ExpiresAt.IsZero() && now.After(generation.ExpiresAt) {
+			delete(h.Generations, key)
+		}
+	}
+}
+
+func (h *lobbyHandler) canRecoverMatchmakingTicketLocked(ticket *MatchmakingTicket, tags *matchmakingTagPair, registrationToken string, now time.Time) bool {
+	if ticket != nil && ticket.codeOwnership == ([sha256.Size]byte{}) {
+		return registrationToken != "" && ticket.registrationOwnership == matchmakingRegistrationOwnership(matchmakingTicketKey(ticket.Version, ticket.Queue, ticket.ID), registrationToken)
+	}
 	if ticket == nil || tags == nil || tags.SelfToken == "" || ticket.codeOwnership != matchmakingCodeOwnership(tags) {
 		return false
 	}
@@ -893,7 +971,7 @@ func (h *lobbyHandler) canRecoverMatchmakingTicketLocked(ticket *MatchmakingTick
 		lease.TicketKey == matchmakingTicketKey(ticket.Version, ticket.Queue, ticket.ID)
 }
 
-func (h *lobbyHandler) makeRoomForMatchmakingTicketLocked() {
+func (h *lobbyHandler) makeRoomForMatchmakingTicketLocked(now time.Time) {
 	for len(h.Tickets) >= maxStoredMatchmakingTickets {
 		var oldest *MatchmakingTicket
 		for _, ticket := range h.Tickets {
@@ -910,19 +988,31 @@ func (h *lobbyHandler) makeRoomForMatchmakingTicketLocked() {
 		if oldest == nil {
 			return
 		}
-		h.deleteTicketLocked(oldest.Version, oldest.Queue, oldest.ID)
+		h.deleteTicketLocked(oldest.Version, oldest.Queue, oldest.ID, now)
 	}
 }
 
-func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, token string, tags *matchmakingTagPair) (*matchmakingResponse, int) {
+func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, token string, tags *matchmakingTagPair, registrationToken string, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
-	now := time.Now()
+	h.cleanupMatchmakingGenerationsLocked(now)
 	key := matchmakingTicketKey(version, queue, ticketID)
 	ticket, ok := h.Tickets[key]
 	if !ok {
+		generationKey := matchmakingGenerationKey(key, tags, registrationToken)
+		if generationKey != ([sha256.Size]byte{}) && token == "" && h.Generations[generationKey] == nil {
+			if len(h.Generations) >= maxMatchmakingGenerations {
+				return nil, http.StatusServiceUnavailable
+			}
+			generation := h.newMatchmakingGenerationLocked(version, tags, now)
+			generation.Canceled = true
+			if tags == nil {
+				generation.ExpiresAt = now.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())
+			}
+			h.Generations[generationKey] = generation
+		}
 		return nil, http.StatusNoContent
 	}
-	if (token == "" || token != ticket.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(ticket, tags, now)) {
+	if (token == "" || token != ticket.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(ticket, tags, registrationToken, now)) {
 		return nil, http.StatusForbidden
 	}
 	h.recordQueueCancellationLocked(ticket, now)
@@ -941,11 +1031,11 @@ func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, 
 				}
 			}
 			delete(h.Matches, ticket.MatchedID)
-			h.deleteTicketLocked(version, queue, ticketID)
+			h.deleteTicketLocked(version, queue, ticketID, now)
 			return resp, http.StatusOK
 		}
 	}
-	h.deleteTicketLocked(version, queue, ticketID)
+	h.deleteTicketLocked(version, queue, ticketID, now)
 	return resp, http.StatusOK
 }
 
@@ -958,6 +1048,9 @@ func (h *lobbyHandler) ensureMatchmakingIndexesLocked() {
 	}
 	if h.TagLeases == nil {
 		h.TagLeases = make(map[string]*MatchmakingTagLease)
+	}
+	if h.Generations == nil {
+		h.Generations = make(map[[sha256.Size]byte]*matchmakingGeneration)
 	}
 }
 
@@ -984,9 +1077,15 @@ func (h *lobbyHandler) removeWaitingTicketLocked(ticket *MatchmakingTicket) {
 	}
 }
 
-func (h *lobbyHandler) deleteTicketLocked(version, queue, ticketID string) {
+func (h *lobbyHandler) deleteTicketLocked(version, queue, ticketID string, now time.Time) {
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if ticket, ok := h.Tickets[key]; ok {
+		if generation := h.Generations[ticket.generationKey]; generation != nil && !generation.Canceled {
+			generation.Canceled = true
+			if generation.Lease == nil {
+				generation.ExpiresAt = now.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())
+			}
+		}
 		if lease := h.TagLeases[matchmakingTagLeaseKey(version, ticket.SelfTag)]; lease.owns(ticket) {
 			lease.TicketKey = ""
 		}
@@ -1154,6 +1253,11 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		request.clientIdentity = cancel.clientIdentity
 		request.Queue = cancel.Queue
 		request.MatchCode = cancel.MatchCode
+		request.RegistrationToken = cancel.RegistrationToken
+	}
+	if len(request.RegistrationToken) > 512 {
+		h.respondError(w, "Invalid registration token", http.StatusBadRequest)
+		return
 	}
 	if !validateClientIdentity(w, h.Config, request.clientIdentity) {
 		return
@@ -1186,9 +1290,9 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 
 	switch r.Method {
 	case http.MethodPut:
-		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, request.ClientVersion, queue, ip, request.Port, request.Metadata, token, tags, request.LocalIPs, request.LocalEndpoints, now)
+		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, request.ClientVersion, queue, ip, request.Port, request.Metadata, token, tags, request.LocalIPs, request.LocalEndpoints, request.RegistrationToken, now)
 	case http.MethodDelete:
-		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token, tags)
+		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token, tags, request.RegistrationToken, now)
 	default:
 		status = http.StatusMethodNotAllowed
 	}

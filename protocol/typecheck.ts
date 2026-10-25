@@ -11,6 +11,7 @@ const matchmaking_request = {
   client_version: '0.11.0',
   compatibility_id: 'antistatic-v1',
   queue: 'default',
+  registration_token: 'client-generated-ordinary-proof',
   port: 45860,
   metadata: { character: 'Carbon' },
   local_ips: ['192.168.1.2'],

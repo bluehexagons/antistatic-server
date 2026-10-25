@@ -215,19 +215,19 @@ func TestReportTicketStorageRemainsBounded(t *testing.T) {
 	}
 	for i := range 4 {
 		first, status := h.refreshOrCreateMatchmakingTicketLocked(fmt.Sprintf("First%d", i), "0.9.5", "0.9.5",
-			"default", "198.51.100.10", 45860, matchmakingMetadata{Character: "Carbon"}, "", nil, nil, nil, now)
+			"default", "198.51.100.10", 45860, matchmakingMetadata{Character: "Carbon"}, "", nil, nil, nil, "", now)
 		if status != http.StatusOK {
 			t.Fatalf("first registration returned %d", status)
 		}
 		second, status := h.refreshOrCreateMatchmakingTicketLocked(fmt.Sprintf("Second%d", i), "0.9.5", "0.9.5",
-			"default", "198.51.100.20", 45861, matchmakingMetadata{Character: "Silicon"}, "", nil, nil, nil, now)
+			"default", "198.51.100.20", 45861, matchmakingMetadata{Character: "Silicon"}, "", nil, nil, nil, "", now)
 		if status != http.StatusOK || second.Status != "matched" {
 			t.Fatalf("second registration returned %d", status)
 		}
 		if len(h.Tickets) > maxStoredMatchmakingTickets {
 			t.Fatalf("ticket storage grew to %d", len(h.Tickets))
 		}
-		if _, status := h.cancelMatchmakingLocked("0.9.5", "default", first.Ticket, first.Token, nil); status != http.StatusOK {
+		if _, status := h.cancelMatchmakingLocked("0.9.5", "default", first.Ticket, first.Token, nil, "", time.Now()); status != http.StatusOK {
 			t.Fatalf("cancellation returned %d", status)
 		}
 		// The peer keeps its authenticated report after cancellation.

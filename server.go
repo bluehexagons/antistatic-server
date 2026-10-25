@@ -308,6 +308,7 @@ type lobbyHandler struct {
 	Matches             map[string]*Match
 	Queues              map[string]*MatchmakingQueue
 	TagLeases           map[string]*MatchmakingTagLease
+	Generations         map[[32]byte]*matchmakingGeneration
 	Metrics             serverMetrics
 	Ticker              *time.Ticker
 	Done                chan struct{}
