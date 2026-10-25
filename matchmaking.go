@@ -48,6 +48,7 @@ type MatchmakingTicket struct {
 	changeNotified bool
 	reportedEvents uint8
 	reportIDs      [7]string
+	codeOwnership  [sha256.Size]byte
 }
 
 type MatchmakingTagLease struct {
@@ -123,7 +124,8 @@ func (t *MatchmakingTicket) notifyStateChangedLocked() {
 // scrubForReportRetention drops player and endpoint metadata after the
 // short-lived peer-introduction window while retaining the routing/lifecycle
 // fields, bearer token, and deduplication state needed by the anonymous
-// game-report endpoint.
+// game-report endpoint. A digest also permits proof-only cancellation/recovery
+// while the current code lease still points to this ticket.
 func (t *MatchmakingTicket) scrubForReportRetention() {
 	t.Endpoints = nil
 	t.Metadata = matchmakingMetadata{}
@@ -605,7 +607,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	h.cleanupMatchmakingLocked(now)
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if existing, ok := h.Tickets[key]; ok {
-		if (token == "" || token != existing.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(existing, tags)) {
+		if (token == "" || token != existing.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(existing, tags, now)) {
 			return nil, http.StatusForbidden
 		}
 		if existing.MatchedID == "" && existing.Metadata != metadata {
@@ -701,6 +703,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		ticket.TagToken = tags.SelfToken
 		ticket.SelfTag = tags.Self
 		ticket.PeerTag = tags.Peer
+		ticket.codeOwnership = matchmakingCodeOwnership(tags)
 	}
 
 	match, other := h.findCompatibleMatchLocked(ticket, now)
@@ -874,10 +877,20 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 	return h.matchmakingTicketResponseLocked("waiting", ticket, now), http.StatusOK
 }
 
-func (h *lobbyHandler) canRecoverMatchmakingTicketLocked(ticket *MatchmakingTicket, tags *matchmakingTagPair) bool {
-	return ticket != nil && tags != nil && tags.SelfToken != "" &&
-		tags.Self == ticket.SelfTag && tags.Peer == ticket.PeerTag && tags.SelfToken == ticket.TagToken &&
-		h.TagLeases[matchmakingTagLeaseKey(ticket.Version, ticket.SelfTag)].owns(ticket)
+func matchmakingCodeOwnership(tags *matchmakingTagPair) [sha256.Size]byte {
+	// Tags are validated alphanumeric values, so the separators unambiguously
+	// bind both their orientation and the secret, even after raw claims are scrubbed.
+	return sha256.Sum256([]byte(tags.Self + "|" + tags.Peer + "|" + tags.SelfToken))
+}
+
+func (h *lobbyHandler) canRecoverMatchmakingTicketLocked(ticket *MatchmakingTicket, tags *matchmakingTagPair, now time.Time) bool {
+	if ticket == nil || tags == nil || tags.SelfToken == "" || ticket.codeOwnership != matchmakingCodeOwnership(tags) {
+		return false
+	}
+	lease := h.TagLeases[matchmakingTagLeaseKey(ticket.Version, tags.Self)]
+	return lease != nil && lease.Token == tags.SelfToken &&
+		!now.After(lease.CheckedIn.Add(h.Config.Timeouts.MatchmakingTagLease.Duration())) &&
+		lease.TicketKey == matchmakingTicketKey(ticket.Version, ticket.Queue, ticket.ID)
 }
 
 func (h *lobbyHandler) makeRoomForMatchmakingTicketLocked() {
@@ -903,17 +916,18 @@ func (h *lobbyHandler) makeRoomForMatchmakingTicketLocked() {
 
 func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, token string, tags *matchmakingTagPair) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
+	now := time.Now()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	ticket, ok := h.Tickets[key]
 	if !ok {
 		return nil, http.StatusNoContent
 	}
-	if (token == "" || token != ticket.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(ticket, tags)) {
+	if (token == "" || token != ticket.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(ticket, tags, now)) {
 		return nil, http.StatusForbidden
 	}
-	h.recordQueueCancellationLocked(ticket, time.Now())
+	h.recordQueueCancellationLocked(ticket, now)
 
-	resp := h.matchmakingTicketResponseLocked("canceled", ticket, time.Now())
+	resp := h.matchmakingTicketResponseLocked("canceled", ticket, now)
 
 	if ticket.MatchedID != "" {
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
