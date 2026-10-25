@@ -12,6 +12,10 @@ import (
 )
 
 const maxMatchmakingTickets = 20000
+
+// Preserve room for active searches while bounding tickets kept for reports.
+// When full, new registrations evict the oldest report-only ticket.
+const maxStoredMatchmakingTickets = 2 * maxMatchmakingTickets
 const maxMatchmakingMatches = 10000
 const maxMatchmakingQueues = 10000
 const maxMatchmakingTagLeases = maxMatchmakingTickets
@@ -53,6 +57,12 @@ type MatchmakingTagLease struct {
 	TicketKey string
 	OwnerIP   string
 	CheckedIn time.Time
+}
+
+func (l *MatchmakingTagLease) owns(ticket *MatchmakingTicket) bool {
+	return l != nil && ticket != nil && l.Version == ticket.Version &&
+		l.Tag == ticket.SelfTag && l.Token == ticket.TagToken &&
+		l.TicketKey == matchmakingTicketKey(ticket.Version, ticket.Queue, ticket.ID)
 }
 
 type matchmakingTagPair struct {
@@ -430,7 +440,7 @@ func (h *lobbyHandler) cleanupMatchmakingTagLeasesLocked(now time.Time) {
 			// A waiting search must not outlive ownership of its friendly tag.
 			// This matters when the configured lease is shorter than the ticket
 			// lifetime. Keep matched tickets for outcome-report retention.
-			if ticket := h.Tickets[lease.TicketKey]; ticket != nil && ticket.MatchedID == "" {
+			if ticket := h.Tickets[lease.TicketKey]; lease.owns(ticket) && ticket.MatchedID == "" {
 				h.recordQueueExpirationLocked(ticket, now)
 				h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID)
 			}
@@ -531,7 +541,7 @@ func (h *lobbyHandler) reserveMatchmakingTagLocked(version, tag, token, ticketKe
 			return "", http.StatusTooManyRequests
 		}
 		if existing.TicketKey != "" && existing.TicketKey != ticketKey {
-			if oldTicket := h.Tickets[existing.TicketKey]; oldTicket != nil && oldTicket.MatchedID == "" {
+			if oldTicket := h.Tickets[existing.TicketKey]; existing.owns(oldTicket) && oldTicket.MatchedID == "" {
 				h.deleteTicketLocked(oldTicket.Version, oldTicket.Queue, oldTicket.ID)
 			}
 		}
@@ -546,9 +556,16 @@ func (h *lobbyHandler) reserveMatchmakingTagLocked(version, tag, token, ticketKe
 	if h.matchmakingTagLeaseCountForIPLocked(ownerIP) >= maxMatchmakingTagLeasesPerIP {
 		return "", http.StatusTooManyRequests
 	}
-	leaseToken, err := generateBearerToken()
-	if err != nil {
-		return "", http.StatusInternalServerError
+	// A client can persist this secret before its initial PUT, so losing the
+	// response cannot strand tag ownership. Clients omitting it get a server
+	// generated token as before.
+	leaseToken := token
+	if leaseToken == "" {
+		var err error
+		leaseToken, err = generateBearerToken()
+		if err != nil {
+			return "", http.StatusInternalServerError
+		}
 	}
 	h.TagLeases[leaseKey] = &MatchmakingTagLease{
 		Version:   version,
@@ -588,7 +605,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 	h.cleanupMatchmakingLocked(now)
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if existing, ok := h.Tickets[key]; ok {
-		if token == "" || token != existing.Token {
+		if (token == "" || token != existing.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(existing, tags)) {
 			return nil, http.StatusForbidden
 		}
 		if existing.MatchedID == "" && existing.Metadata != metadata {
@@ -661,6 +678,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		}
 		tags.SelfToken = tagToken
 	}
+	h.makeRoomForMatchmakingTicketLocked()
 
 	ticket := &MatchmakingTicket{
 		ID:             ticketID,
@@ -856,14 +874,41 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 	return h.matchmakingTicketResponseLocked("waiting", ticket, now), http.StatusOK
 }
 
-func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, token string) (*matchmakingResponse, int) {
+func (h *lobbyHandler) canRecoverMatchmakingTicketLocked(ticket *MatchmakingTicket, tags *matchmakingTagPair) bool {
+	return ticket != nil && tags != nil && tags.SelfToken != "" &&
+		tags.Self == ticket.SelfTag && tags.Peer == ticket.PeerTag && tags.SelfToken == ticket.TagToken &&
+		h.TagLeases[matchmakingTagLeaseKey(ticket.Version, ticket.SelfTag)].owns(ticket)
+}
+
+func (h *lobbyHandler) makeRoomForMatchmakingTicketLocked() {
+	for len(h.Tickets) >= maxStoredMatchmakingTickets {
+		var oldest *MatchmakingTicket
+		for _, ticket := range h.Tickets {
+			if ticket.MatchedID == "" || h.Matches[ticket.MatchedID] != nil {
+				continue
+			}
+			if oldest == nil || ticket.CheckedIn.Before(oldest.CheckedIn) ||
+				(ticket.CheckedIn.Equal(oldest.CheckedIn) && ticket.ID < oldest.ID) {
+				oldest = ticket
+			}
+		}
+		// Admission already checked the smaller active-ticket limit, so a
+		// full store always contains a report-only ticket.
+		if oldest == nil {
+			return
+		}
+		h.deleteTicketLocked(oldest.Version, oldest.Queue, oldest.ID)
+	}
+}
+
+func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, token string, tags *matchmakingTagPair) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	key := matchmakingTicketKey(version, queue, ticketID)
 	ticket, ok := h.Tickets[key]
 	if !ok {
 		return nil, http.StatusNoContent
 	}
-	if token == "" || token != ticket.Token {
+	if (token == "" || token != ticket.Token) && !(token == "" && h.canRecoverMatchmakingTicketLocked(ticket, tags)) {
 		return nil, http.StatusForbidden
 	}
 	h.recordQueueCancellationLocked(ticket, time.Now())
@@ -928,6 +973,9 @@ func (h *lobbyHandler) removeWaitingTicketLocked(ticket *MatchmakingTicket) {
 func (h *lobbyHandler) deleteTicketLocked(version, queue, ticketID string) {
 	key := matchmakingTicketKey(version, queue, ticketID)
 	if ticket, ok := h.Tickets[key]; ok {
+		if lease := h.TagLeases[matchmakingTagLeaseKey(version, ticket.SelfTag)]; lease.owns(ticket) {
+			lease.TicketKey = ""
+		}
 		h.removeWaitingTicketLocked(ticket)
 		ticket.notifyStateChangedLocked()
 	}
@@ -1126,7 +1174,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	case http.MethodPut:
 		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, request.ClientVersion, queue, ip, request.Port, request.Metadata, token, tags, request.LocalIPs, request.LocalEndpoints, now)
 	case http.MethodDelete:
-		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token)
+		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token, tags)
 	default:
 		status = http.StatusMethodNotAllowed
 	}

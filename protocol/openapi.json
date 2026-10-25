@@ -321,7 +321,7 @@
         "properties": {
           "self_tag": { "type": "string", "pattern": "^[A-Z0-9]{4,8}$" },
           "peer_tag": { "type": "string", "pattern": "^[A-Z0-9]{4,8}$" },
-          "self_tag_token": { "type": "string", "maxLength": 512 }
+          "self_tag_token": { "type": "string", "maxLength": 512, "description": "Secret proving ownership of self_tag. Persist a random 256-bit token before the first PUT; a new lease retains it. With no ticket bearer token, the same secret and reciprocal tag claim can recover or cancel that lease's ticket after a lost response. Omit to request a server-generated lease token." }
         }
       },
       "MatchmakingRequest": {

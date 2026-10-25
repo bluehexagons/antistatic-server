@@ -4,5 +4,5 @@
   "queue": "code",
   "port": 45860,
   "metadata": { "character": "Carbon" },
-  "match_code": { "self_tag": "ABCD", "peer_tag": "EFGH" }
+  "match_code": { "self_tag": "ABCD", "peer_tag": "EFGH", "self_tag_token": "client-persisted-ownership-secret" }
 }

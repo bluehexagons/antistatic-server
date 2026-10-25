@@ -40,6 +40,14 @@ The HTTP surface is fixed at `/api/v1`. Every request body includes
 admission. Ownership tokens use `Authorization: Bearer …`; no custom ownership
 or match-code headers are part of the API.
 
+For Match by Code, persist a random 256-bit `match_code.self_tag_token` before
+the initial PUT. An unleased tag adopts that secret. Retrying the same ticket
+and tag pair with the secret recovers the original response if it was lost;
+DELETE can use the same proof when the ticket bearer token was never received.
+The proof must still own the lease's current ticket. A new ticket with that
+proof replaces its previous waiting search. Omitting the proof requests a
+server-generated tag token, which must be retained from the response.
+
 Report and metric routes use status `426` for two early admission failures.
 An incompatible client receives the structured `APIErrorResponse` JSON body;
 an insecure non-loopback request receives a plaintext HTTPS-required error.

@@ -119,21 +119,24 @@ Specifying a port using -tlsport will implicitly enable TLS.
 
 To keep memory and CPU bounded under abusive traffic, the server enforces fixed in-memory limits:
 
-| Limit                                  | Value     |
-| -------------------------------------- | --------- |
-| URL path length                        | 512 bytes |
-| Request body size                      | 10 KiB    |
-| Tracked rate-limit clients             | 65,536    |
-| Active lobbies                         | 10,000    |
-| Members per lobby                      | 128       |
-| Matchmaking tickets                    | 20,000    |
-| Active matchmaking matches             | 10,000    |
-| Match-by-code tag leases               | 20,000    |
-| Match-by-code tag leases per client IP | 8         |
-| Report collection file                 | 64 MiB    |
-| Retained records per collection        | 10,000    |
+| Limit                                     | Value     |
+| ----------------------------------------- | --------- |
+| URL path length                           | 512 bytes |
+| Request body size                         | 10 KiB    |
+| Tracked rate-limit clients                | 65,536    |
+| Active lobbies                            | 10,000    |
+| Members per lobby                         | 128       |
+| Active matchmaking tickets                | 20,000    |
+| Total tickets, including report retention | 40,000    |
+| Active matchmaking matches                | 10,000    |
+| Match-by-code tag leases                  | 20,000    |
+| Match-by-code tag leases per client IP    | 8         |
+| Report collection file                    | 64 MiB    |
+| Retained records per collection           | 10,000    |
 
 When a capacity limit is reached, new state-creating requests return `503 Service Unavailable`; existing tickets and lobby members can continue to refresh until they expire or are deleted.
+At the total ticket limit, new matchmaking registrations evict the oldest
+report-only ticket. Active searches and matches are never evicted for reports.
 
 ### Environment variables
 
@@ -540,14 +543,18 @@ For Match by Code, set `queue` to `code` and include a JSON claim:
 "match_code": {
   "self_tag": "ALPHA1",
   "peer_tag": "BRAVO2",
-  "self_tag_token": "optional-returned-lease-token"
+  "self_tag_token": "persisted-random-256-bit-secret"
 }
 ```
 
 The server leases the self tag to one owner token for 1 hour, returns that
 token as `tag_token`, and only matches reciprocal claims (`A -> B` with
 `B -> A`). Matching is case-insensitive. A single client IP can hold at most
-8 active match-code leases. When a lease expires, its waiting search is removed
+8 active match-code leases. Persist a random 256-bit `self_tag_token` before
+the first PUT; a new lease adopts it. If the response is lost, the same secret
+and tag pair recover the ticket on PUT or authenticate its DELETE without the
+missing ticket token. Omitting it requests a server-generated tag token.
+When a lease expires, its waiting search is removed
 and pending long polls are notified. Matched tickets remain available for
 outcome reporting until their separate retention timeout. This also applies
 when a deployment configures a lease shorter than the waiting-ticket lifetime.
