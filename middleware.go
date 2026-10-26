@@ -233,6 +233,15 @@ func (rl *rateLimiter) shard(ip string) *rateLimiterShard {
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
+		// Local health monitors connect directly, without a forwarded identity.
+		// Keep this exception out of getClientIP so application endpoints never
+		// treat a proxy's address as the identity of one of its clients.
+		if ip == "" && r.Method == http.MethodGet && r.URL.Path == "/health" &&
+			len(r.Header.Values("X-Forwarded-For")) == 0 && len(r.Header.Values("X-Real-IP")) == 0 {
+			if remote := net.ParseIP(remoteIP(r)); remote != nil && remote.IsLoopback() {
+				ip = remote.String()
+			}
+		}
 		if ip == "" {
 			if rl.metrics != nil {
 				rl.metrics.recordHTTPError("Unable to determine client IP", http.StatusBadRequest)

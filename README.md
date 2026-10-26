@@ -193,6 +193,11 @@ attack surface as the existing HTTP listener.
 
 `-trust-proxy` is still opt-in. When enabled, forwarded headers are only honored if the immediate TCP peer is in `-trusted-proxy-cidrs`. Requests from a trusted proxy must contain one unambiguous, valid `X-Forwarded-For` or `X-Real-IP` client address; missing or multi-hop values are rejected rather than grouped under the proxy address.
 
+Direct loopback `GET /health` probes may omit both forwarding headers, allowing
+local service monitors to check readiness. These probes remain rate limited.
+Other routes still require a forwarded identity when the peer is trusted, and
+malformed or conflicting forwarding headers are rejected even on `/health`.
+
 For example, when nginx runs on the same host and proxies to the Go server over loopback, use `-trust-proxy -trusted-proxy-cidrs 127.0.0.1/32`.
 If nginx connects over IPv6 loopback, include `::1/128` as well.
 Configure the proxy to overwrite one client identity header with its resolved
