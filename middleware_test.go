@@ -61,6 +61,62 @@ func TestGetClientIPIgnoresForwardedHeadersFromUntrustedProxy(t *testing.T) {
 	}
 }
 
+func TestRateLimiterAllowsOnlyDirectLoopbackHealthProbes(t *testing.T) {
+	trustProxy = true
+	if err := setTrustedProxyCIDRs("127.0.0.1/32,::1/128,10.0.0.0/8"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		trustProxy = false
+		trustedProxyRanges = nil
+	}()
+
+	tests := []struct {
+		name, method, path, remote string
+		headers                    map[string]string
+		want                       int
+	}{
+		{"IPv4 probe", "GET", "/health", "127.0.0.1:12345", nil, http.StatusOK},
+		{"IPv6 probe", "GET", "/health", "[::1]:12345", nil, http.StatusOK},
+		{"non-loopback proxy", "GET", "/health", "10.0.0.1:12345", nil, http.StatusBadRequest},
+		{"application route", "GET", "/", "127.0.0.1:12345", nil, http.StatusBadRequest},
+		{"health HTML", "GET", "/health.html", "127.0.0.1:12345", nil, http.StatusBadRequest},
+		{"write method", "POST", "/health", "127.0.0.1:12345", nil, http.StatusBadRequest},
+		{"empty forwarding", "GET", "/health", "127.0.0.1:12345", map[string]string{"X-Real-IP": ""}, http.StatusBadRequest},
+		{"malformed forwarding", "GET", "/health", "127.0.0.1:12345", map[string]string{"X-Forwarded-For": "invalid"}, http.StatusBadRequest},
+		{"conflicting forwarding", "GET", "/health", "127.0.0.1:12345", map[string]string{"X-Forwarded-For": "192.0.2.1", "X-Real-IP": "192.0.2.2"}, http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limiter := newRateLimiter(1, 1, time.Minute)
+			defer limiter.Stop()
+			handler := limiter.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req.RemoteAddr = tt.remote
+			for name, value := range tt.headers {
+				req.Header.Set(name, value)
+			}
+			if got := getClientIP(req); got != "" {
+				t.Fatalf("getClientIP() = %q, want no application identity", got)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+			if tt.want == http.StatusOK {
+				rec = httptest.NewRecorder()
+				handler.ServeHTTP(rec, req)
+				if rec.Code != http.StatusTooManyRequests {
+					t.Fatalf("second probe status = %d, want rate limit", rec.Code)
+				}
+			}
+		})
+	}
+}
+
 func TestGetClientIPRejectsTrustedProxyWithNoForwardedHeaders(t *testing.T) {
 	trustProxy = true
 	if err := setTrustedProxyCIDRs("10.0.0.0/8"); err != nil {

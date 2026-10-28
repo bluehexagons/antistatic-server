@@ -124,7 +124,10 @@ For example, when nginx runs on the same host and proxies to the Go server over 
 If nginx connects over IPv6 loopback, include `::1/128` as well.
 Trusted proxies must supply one valid client IP in `X-Real-IP` or
 `X-Forwarded-For`; chains, duplicate headers, missing headers, and conflicting
-identities are rejected. Local health probes can send `X-Real-IP: 127.0.0.1`.
+identities are rejected. Direct loopback `GET /health` probes may omit both
+forwarding headers; they remain rate limited. Other routes still require a
+forwarded identity, and malformed or conflicting headers are rejected even on
+`/health`.
 
 Quick command to generate a self-signed certificate:
 ```bash
