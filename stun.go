@@ -88,6 +88,20 @@ func (s *stunServer) handlePacket(b []byte, raddr *net.UDPAddr) {
 	if binary.BigEndian.Uint32(b[4:8]) != stunMagicCookie {
 		return
 	}
+	bodyLength := int(binary.BigEndian.Uint16(b[2:4]))
+	if bodyLength%4 != 0 || bodyLength != len(b)-stunHeaderLength {
+		return
+	}
+	for offset := stunHeaderLength; offset < len(b); {
+		if len(b)-offset < 4 {
+			return
+		}
+		length := int(binary.BigEndian.Uint16(b[offset+2 : offset+4]))
+		offset += 4 + (length+3)&^3
+		if offset > len(b) {
+			return
+		}
+	}
 	txn := b[8:stunHeaderLength]
 	resp, ok := buildBindingSuccess(txn, raddr)
 	if !ok {

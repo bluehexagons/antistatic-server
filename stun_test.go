@@ -151,3 +151,52 @@ func TestStunIgnoresNonBindingPackets(t *testing.T) {
 		t.Fatalf("expected timeout, got %d bytes", n)
 	}
 }
+
+func TestStunValidatesMessageAndAttributeLengths(t *testing.T) {
+	srv, err := startStunServer("127.0.0.1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close(context.Background())
+	for _, tc := range []struct {
+		name     string
+		declared uint16
+		body     []byte
+		valid    bool
+	}{
+		{"empty", 0, nil, true},
+		{"padded attribute", 8, []byte{0x80, 0x22, 0, 1, 'x', 0, 0, 0}, true},
+		{"missing body", 4, nil, false},
+		{"trailing body", 0, []byte{0, 0, 0, 0}, false},
+		{"unaligned body", 1, []byte{0}, false},
+		{"truncated attribute", 4, []byte{0x80, 0x22, 0, 1}, false},
+		{"oversized attribute", 4, []byte{0x80, 0x22, 0xff, 0xff}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			packet := make([]byte, stunHeaderLength, stunHeaderLength+len(tc.body))
+			binary.BigEndian.PutUint16(packet[0:2], stunBindingRequestType)
+			binary.BigEndian.PutUint16(packet[2:4], tc.declared)
+			binary.BigEndian.PutUint32(packet[4:8], stunMagicCookie)
+			packet = append(packet, tc.body...)
+			if _, err := conn.WriteToUDP(packet, srv.localAddr().(*net.UDPAddr)); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = conn.ReadFromUDP(make([]byte, stunMaxPacketLength))
+			if tc.valid {
+				if err != nil {
+					t.Fatalf("valid request failed: %v", err)
+				}
+			} else if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+				t.Fatalf("malformed request should time out, got %v", err)
+			}
+		})
+	}
+}
