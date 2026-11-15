@@ -62,7 +62,9 @@ func (s *stunServer) localAddr() net.Addr {
 }
 
 func (s *stunServer) serve() {
-	buf := make([]byte, stunMaxPacketLength)
+	// An extra byte distinguishes a complete maximum-sized datagram from an
+	// oversized datagram whose truncated prefix happens to be valid STUN.
+	buf := make([]byte, stunMaxPacketLength+1)
 	for {
 		n, raddr, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
@@ -74,12 +76,14 @@ func (s *stunServer) serve() {
 			slog.Debug("STUN read error", "error", err)
 			continue
 		}
-		s.handlePacket(buf[:n], raddr)
+		if n <= stunMaxPacketLength {
+			s.handlePacket(buf[:n], raddr)
+		}
 	}
 }
 
 func (s *stunServer) handlePacket(b []byte, raddr *net.UDPAddr) {
-	if len(b) < stunHeaderLength {
+	if len(b) < stunHeaderLength || len(b) > stunMaxPacketLength {
 		return
 	}
 	if binary.BigEndian.Uint16(b[0:2]) != stunBindingRequestType {

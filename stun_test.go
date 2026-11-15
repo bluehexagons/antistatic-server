@@ -166,6 +166,9 @@ func TestStunValidatesMessageAndAttributeLengths(t *testing.T) {
 	}{
 		{"empty", 0, nil, true},
 		{"padded attribute", 8, []byte{0x80, 0x22, 0, 1, 'x', 0, 0, 0}, true},
+		{"maximum packet", stunMaxPacketLength - stunHeaderLength, make([]byte, stunMaxPacketLength-stunHeaderLength), true},
+		{"oversized valid prefix", stunMaxPacketLength - stunHeaderLength, make([]byte, stunMaxPacketLength-stunHeaderLength+1), false},
+		{"oversized datagram", stunMaxPacketLength - stunHeaderLength, make([]byte, 4096), false},
 		{"missing body", 4, nil, false},
 		{"trailing body", 0, []byte{0, 0, 0, 0}, false},
 		{"unaligned body", 1, []byte{0}, false},
