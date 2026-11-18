@@ -431,6 +431,64 @@ func TestLobbyRefreshRequiresMemberToken(t *testing.T) {
 	}
 }
 
+func TestRejectedLobbyRefreshDoesNotCreateLobby(t *testing.T) {
+	h := newTestLobbyHandler()
+	response := serveLobbyRequestWithToken(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000", "expired-token")
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", response.Code)
+	}
+	if len(h.Lobbies) != 0 || h.Metrics.lobbiesCreated.Load() != 0 {
+		t.Fatal("a rejected refresh created lobby state")
+	}
+}
+
+func TestLobbyAdmissionReclaimsExpiredCapacity(t *testing.T) {
+	h := newTestLobbyHandler()
+	now := time.Now()
+	expired := now.Add(-h.Config.Timeouts.LobbyMember.Duration() - time.Second)
+	for i := range maxLobbies {
+		key := strconv.Itoa(i)
+		h.Lobbies[lobbyStorageKey(h.Config.Service.CompatibilityID, key)] = &Lobby{
+			Key: key, Members: []*Member{{CheckedIn: expired}},
+		}
+	}
+	active := h.Lobbies[lobbyStorageKey(h.Config.Service.CompatibilityID, "0")]
+	active.Members[0].CheckedIn = now
+	response := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")
+	if response.Code != http.StatusOK || len(h.Lobbies) != 2 {
+		t.Fatalf("admission status = %d, lobbies = %d", response.Code, len(h.Lobbies))
+	}
+	if h.Lobbies[lobbyStorageKey(h.Config.Service.CompatibilityID, "0")] != active {
+		t.Fatal("capacity sweep retired a live lobby")
+	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestBearerTokenRequiresUnambiguousHeader(t *testing.T) {
+	for _, test := range []struct {
+		headers []string
+		token   string
+		valid   bool
+	}{
+		{nil, "", true},
+		{[]string{"Bearer owner-token"}, "owner-token", true},
+		{[]string{""}, "", false},
+		{[]string{"Bearer owner-token", "Bearer other-token"}, "", false},
+		{[]string{"Bearer owner-token,other-token"}, "", false},
+	} {
+		r := httptest.NewRequest(http.MethodPut, "/", nil)
+		for _, header := range test.headers {
+			r.Header.Add("Authorization", header)
+		}
+		token, valid := bearerToken(r)
+		if token != test.token || valid != test.valid {
+			t.Errorf("bearerToken(%q) = %q, %v", test.headers, token, valid)
+		}
+	}
+}
+
 func TestLobbyDeleteRequiresMemberToken(t *testing.T) {
 	h := newTestLobbyHandler()
 	first := serveLobbyRequest(h, http.MethodPut, "/0.9.5/lobby/ABC123/45860", "198.51.100.10:32000")

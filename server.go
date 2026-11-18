@@ -13,6 +13,7 @@ import (
 
 const maxPathLength = 512
 const maxLobbies = 10000
+const lobbyCapacitySweepInterval = time.Second
 
 const recentErrorCap = 20
 const activityWindowDays = 14
@@ -303,6 +304,7 @@ type lobbyHandler struct {
 	Config              Config
 	Mu                  sync.RWMutex
 	Lobbies             map[string]*Lobby
+	lastLobbySweep      time.Time
 	Tickets             map[string]*MatchmakingTicket
 	Waiting             map[string]map[string]*MatchmakingTicket
 	Matches             map[string]*Match
@@ -404,15 +406,23 @@ func (h *lobbyHandler) Maintain() {
 	})
 }
 
-func (h *lobbyHandler) maintainAt(now time.Time) {
-	h.Mu.Lock()
+func (h *lobbyHandler) cleanLobbiesLocked(now time.Time) {
+	h.lastLobbySweep = now
+	previousCount := len(h.Lobbies)
 	for k, l := range h.Lobbies {
 		l.Clean(now, h.Config.Timeouts.LobbyMember.Duration())
 		if len(l.Members) == 0 {
 			delete(h.Lobbies, k)
-			slog.Info("Lobby emptied (timeout)")
 		}
 	}
+	if expired := previousCount - len(h.Lobbies); expired > 0 {
+		slog.Info("Empty lobbies expired", "count", expired)
+	}
+}
+
+func (h *lobbyHandler) maintainAt(now time.Time) {
+	h.Mu.Lock()
+	h.cleanLobbiesLocked(now)
 	h.cleanupMatchmakingLocked(now)
 	h.Mu.Unlock()
 
@@ -462,12 +472,14 @@ func (h *lobbyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch parts[2] {
 	case "lobbies":
+		w.Header().Set("Cache-Control", "no-store")
 		if len(parts) != 4 || (r.Method != http.MethodPut && r.Method != http.MethodDelete) {
 			h.respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		h.serveLobby(w, r, ip, parts[3])
 	case "matchmaking":
+		w.Header().Set("Cache-Control", "no-store")
 		if len(parts) == 5 && parts[4] == "outcome" && r.Method == http.MethodPost {
 			if !h.Config.Features.MatchmakingReports {
 				h.respondError(w, "Not found", http.StatusNotFound)
@@ -554,6 +566,14 @@ func (h *lobbyHandler) serveLobby(w http.ResponseWriter, r *http.Request, ip, ke
 			h.Mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+		if token != "" {
+			h.Mu.Unlock()
+			h.respondError(w, "Invalid lobby member token", http.StatusForbidden)
+			return
+		}
+		if len(h.Lobbies) >= maxLobbies && now.Sub(h.lastLobbySweep) >= lobbyCapacitySweepInterval {
+			h.cleanLobbiesLocked(now)
 		}
 		if len(h.Lobbies) >= maxLobbies {
 			h.Mu.Unlock()

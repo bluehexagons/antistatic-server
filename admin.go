@@ -120,7 +120,7 @@ func (admin *adminServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	usernameHash := sha256.Sum256([]byte(username))
 	passwordHash := sha256.Sum256([]byte(password))
 	credentialsMatch := subtle.ConstantTimeCompare(usernameHash[:], admin.usernameHash[:]) & subtle.ConstantTimeCompare(passwordHash[:], admin.passwordHash[:])
-	if !ok || credentialsMatch != 1 {
+	if !ok || len(r.Header.Values("Authorization")) != 1 || credentialsMatch != 1 {
 		w.Header().Set("WWW-Authenticate", fmt.Sprintf("Basic realm=%q, charset=\"UTF-8\"", admin.serviceName+" admin"))
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -132,7 +132,8 @@ func requestIsHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return trustProxy && isTrustedProxy(remoteIP(r)) && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	forwarded := r.Header.Values("X-Forwarded-Proto")
+	return trustProxy && isTrustedProxy(remoteIP(r)) && len(forwarded) == 1 && strings.EqualFold(strings.TrimSpace(forwarded[0]), "https")
 }
 
 func latestRecords[T any](records []T) []T {

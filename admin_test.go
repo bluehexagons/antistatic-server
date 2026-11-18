@@ -50,6 +50,14 @@ func TestAdminRequiresTLSAndConstantTimeCredentials(t *testing.T) {
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "storage is unavailable") {
 		t.Fatalf("authenticated unavailable admin = %d: %s", recorder.Code, recorder.Body.String())
 	}
+	request := adminRequest(http.MethodGet, "/admin/", "operator", "correct horse battery staple", true)
+	request.Header.Add("Authorization", request.Header.Get("Authorization"))
+	recorder = httptest.NewRecorder()
+	admin.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("ambiguous admin authorization status = %d, want 401", recorder.Code)
+	}
+
 	recorder = httptest.NewRecorder()
 	admin.ServeHTTP(recorder, adminRequest(http.MethodGet, "/admin/style.css", "", "", true))
 	if recorder.Code != http.StatusUnauthorized {
@@ -123,14 +131,18 @@ func TestAdminAcceptsForwardedHTTPSOnlyFromTrustedProxy(t *testing.T) {
 	admin := newAdminHandler(nil, "operator", "password", "Antistatic", DefaultConfig().Features)
 	for _, test := range []struct {
 		remote string
+		proto  []string
 		want   int
 	}{
-		{"10.1.2.3:1234", http.StatusOK},
-		{"198.51.100.10:1234", http.StatusBadRequest},
+		{"10.1.2.3:1234", []string{"https"}, http.StatusOK},
+		{"10.1.2.3:1234", []string{"https", "http"}, http.StatusBadRequest},
+		{"198.51.100.10:1234", []string{"https"}, http.StatusBadRequest},
 	} {
 		request := adminRequest(http.MethodGet, "/admin/", "operator", "password", false)
 		request.RemoteAddr = test.remote
-		request.Header.Set("X-Forwarded-Proto", "https")
+		for _, proto := range test.proto {
+			request.Header.Add("X-Forwarded-Proto", proto)
+		}
 		recorder := httptest.NewRecorder()
 		admin.ServeHTTP(recorder, request)
 		if recorder.Code != test.want {

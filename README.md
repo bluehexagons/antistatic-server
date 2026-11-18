@@ -135,6 +135,7 @@ To keep memory and CPU bounded under abusive traffic, the server enforces fixed 
 | Retained records per collection           | 10,000    |
 
 When a capacity limit is reached, new state-creating requests return `503 Service Unavailable`; existing tickets and lobby members can continue to refresh until they expire or are deleted.
+At lobby capacity, admission checks for expired lobbies at most once per second.
 At the total ticket limit, new matchmaking registrations evict the oldest
 report-only ticket. Active searches and matches are never evicted for reports.
 
@@ -413,7 +414,7 @@ feedback and should be encrypted and access-controlled.
 Lobby and matchmaking ownership uses `Authorization: Bearer <token>`. The
 first successful `PUT` returns a `token`; clients send it when refreshing,
 deleting, or reporting on the same member or ticket. Tokens should not be
-logged or shared.
+logged or shared. Coordination responses use `Cache-Control: no-store`.
 
 ### Health Endpoint Response
 
@@ -750,7 +751,7 @@ Its STUN listener is disabled so it can share the responder from the
 preserves the released client's older protocol and publishes separate v0.9.x
 server releases.
 
-Requires Go 1.27.3 or later, including the October 2026 security fixes.
+Requires Go 1.27.4 or later, including the November 2026 security fixes.
 
 On the standard Basaltwater agent VM, select the Node 26+ release used by the
 protocol tooling, install dependencies, and run the complete local gate:

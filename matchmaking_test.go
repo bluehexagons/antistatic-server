@@ -162,6 +162,9 @@ func TestMatchmakingTicketCreatesWaitingResponse(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT returned status %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
 
 	response := decodeMatchmakingResponse(t, rec)
 	if response.Status != "waiting" {

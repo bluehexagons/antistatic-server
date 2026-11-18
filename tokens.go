@@ -19,15 +19,15 @@ func generateBearerToken() (string, error) {
 
 func bearerToken(r *http.Request) (string, bool) {
 	const prefix = "Bearer "
-	value := r.Header.Get("Authorization")
-	if value == "" {
+	values := r.Header.Values("Authorization")
+	if len(values) == 0 {
 		return "", true
 	}
-	if !strings.HasPrefix(value, prefix) {
+	if len(values) != 1 || !strings.HasPrefix(values[0], prefix) {
 		return "", false
 	}
-	token := strings.TrimSpace(value[len(prefix):])
-	if token == "" || len(token) > maxBearerTokenLength || strings.ContainsAny(token, " \t\r\n") {
+	token := strings.TrimSpace(values[0][len(prefix):])
+	if token == "" || len(token) > maxBearerTokenLength || strings.ContainsAny(token, ", \t\r\n") {
 		return "", false
 	}
 	return token, true

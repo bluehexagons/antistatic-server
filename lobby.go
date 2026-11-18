@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"slices"
 	"sync"
 	"time"
 )
@@ -45,19 +46,13 @@ func (l *Lobby) Clean(now time.Time, memberTimeout time.Duration) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 
-	if l.Members == nil {
-		return
-	}
-
-	valid := l.Members[:0]
-	for _, m := range l.Members {
+	l.Members = slices.DeleteFunc(l.Members, func(m *Member) bool {
 		if now.After(m.CheckedIn.Add(memberTimeout)) {
-			continue
+			return true
 		}
 		m.Endpoints = m.endpointCheckIns.prune(m.Endpoints, now, memberTimeout)
-		valid = append(valid, m)
-	}
-	l.Members = valid
+		return false
+	})
 }
 
 // CheckIn registers (or refreshes) a member endpoint. The two-family flow
@@ -122,8 +117,10 @@ func (l *Lobby) CheckOut(token string) error {
 			continue
 		}
 		if len(l.Members) > 1 {
-			l.Members[k] = l.Members[len(l.Members)-1]
-			l.Members = l.Members[:len(l.Members)-1]
+			last := len(l.Members) - 1
+			l.Members[k] = l.Members[last]
+			l.Members[last] = nil
+			l.Members = l.Members[:last]
 		} else {
 			l.Members = nil
 		}
