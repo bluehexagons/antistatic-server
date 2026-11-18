@@ -497,6 +497,10 @@ response.
 
 `local_ips` and `local_endpoints` are optional. Entries are sanitized to private-scope addresses, and non-loopback endpoint IPs must also appear in `local_ips`. They are only reflected to lobby peers seen from the same public IP.
 
+Each public address family expires independently after `timeouts.lobby_member`
+without a check-in on that family. A membership stays active while another
+family keeps checking in. A returning family can use the same member token.
+
 ### Lobby Check-In Response
 
 ```json
@@ -541,6 +545,11 @@ as generic coordination. The local fields follow the same sanitization and
 visibility rules as lobby check-ins. They let same-NAT or same-host clients try
 LAN/loopback tunnel candidates without exposing local addresses to unrelated
 WAN peers.
+
+Waiting tickets expire each public address family independently using
+`timeouts.matchmaking_ticket`. A fresh family keeps the ticket in the queue,
+and a returning family can use the same ticket token. Once paired, a match
+retains its endpoint snapshot for the peer introduction window.
 
 For Match by Code, set `queue` to `code` and include a JSON claim:
 

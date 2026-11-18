@@ -1085,6 +1085,32 @@ func TestMatchmakingCodeTagLeaseRefreshRespectsNewIPCap(t *testing.T) {
 	}
 }
 
+func TestMatchmakingExpiresEndpointFamiliesIndependently(t *testing.T) {
+	h := newTestLobbyHandler()
+	now := time.Unix(1000, 0)
+	timeout := h.Config.Timeouts.MatchmakingTicket.Duration()
+	version := h.Config.Service.CompatibilityID
+	checkIn := func(ip string, port int, token string, at time.Time) *matchmakingResponse {
+		t.Helper()
+		response, status := h.refreshOrCreateMatchmakingTicketLocked("TicketA", version, "0.9.5", "default", ip, port,
+			matchmakingMetadata{Character: "Silicon"}, token, nil, nil, nil, "", at)
+		if status != http.StatusOK || response == nil || response.Status != "waiting" {
+			t.Fatalf("check-in returned %d, %#v", status, response)
+		}
+		return response
+	}
+	token := checkIn("2001:db8::1", 45861, "", now).Token
+	checkIn("198.51.100.10", 45860, token, now.Add(timeout/2))
+	response := checkIn("198.51.100.10", 45862, token, now.Add(timeout+time.Second))
+	if !reflect.DeepEqual(response.Endpoints, []Endpoint{{IP: "198.51.100.10", Port: 45862}}) {
+		t.Fatalf("expected only the refreshed IPv4 route: %#v", response.Endpoints)
+	}
+	response = checkIn("2001:db8::1", 45863, token, now.Add(timeout+2*time.Second))
+	if response.Token != token || len(response.Endpoints) != 2 || response.Endpoints[1].Port != 45863 {
+		t.Fatalf("expected recovered IPv6 on the same ticket: %#v", response)
+	}
+}
+
 func TestMatchmakingPutLongPollWakesOnMatch(t *testing.T) {
 	h := newTestLobbyHandler()
 

@@ -54,6 +54,7 @@ func (l *Lobby) Clean(now time.Time, memberTimeout time.Duration) {
 		if now.After(m.CheckedIn.Add(memberTimeout)) {
 			continue
 		}
+		m.Endpoints = m.endpointCheckIns.prune(m.Endpoints, now, memberTimeout)
 		valid = append(valid, m)
 	}
 	l.Members = valid
@@ -67,7 +68,7 @@ func (l *Lobby) Clean(now time.Time, memberTimeout time.Duration) {
 // endpoint. Subsequent refresh PUTs re-merge by family — a port mapping
 // shift on one family just updates that family's endpoint without
 // disturbing the other.
-func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string, localEndpoints []Endpoint) (string, error) {
+func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string, localEndpoints []Endpoint, now time.Time) (string, error) {
 	l.Mu.Lock()
 	defer l.Mu.Unlock()
 	if token != "" {
@@ -75,8 +76,8 @@ func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string, lo
 			if m.Token != token {
 				continue
 			}
-			m.MergeEndpoint(ip, port)
-			m.CheckedIn = time.Now()
+			m.Endpoints = m.endpointCheckIns.merge(m.Endpoints, ip, port, now)
+			m.CheckedIn = now
 			m.LocalIPs = localIPs
 			m.LocalEndpoints = localEndpoints
 			return m.Token, nil
@@ -95,13 +96,14 @@ func (l *Lobby) CheckIn(ip string, port int, token string, localIPs []string, lo
 	if err != nil {
 		return "", err
 	}
-	l.Members = append(l.Members, &Member{
-		Endpoints:      []Endpoint{{IP: ip, Port: port}},
+	member := &Member{
 		LocalIPs:       localIPs,
 		LocalEndpoints: localEndpoints,
 		Token:          memberToken,
-		CheckedIn:      time.Now(),
-	})
+		CheckedIn:      now,
+	}
+	member.Endpoints = member.endpointCheckIns.merge(nil, ip, port, now)
+	l.Members = append(l.Members, member)
 	return memberToken, nil
 }
 

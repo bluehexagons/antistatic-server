@@ -52,6 +52,7 @@ type MatchmakingTicket struct {
 	codeOwnership         [sha256.Size]byte
 	registrationOwnership [sha256.Size]byte
 	generationKey         [sha256.Size]byte
+	endpointCheckIns      endpointCheckIns
 }
 
 // Admission reserves a slot so cancellation never needs to evict another
@@ -83,22 +84,6 @@ type matchmakingTagPair struct {
 	Self      string `json:"self_tag"`
 	Peer      string `json:"peer_tag"`
 	SelfToken string `json:"self_tag_token,omitempty"`
-}
-
-// mergeEndpoint adds (or replaces in-family) a checked-in endpoint, capped
-// at maxEndpointsPerMember.
-func (t *MatchmakingTicket) mergeEndpoint(ip string, port int) {
-	family := ipFamily(ip)
-	for i := range t.Endpoints {
-		if ipFamily(t.Endpoints[i].IP) == family {
-			t.Endpoints[i] = Endpoint{IP: ip, Port: port}
-			return
-		}
-	}
-	if len(t.Endpoints) >= maxEndpointsPerMember {
-		return
-	}
-	t.Endpoints = append(t.Endpoints, Endpoint{IP: ip, Port: port})
 }
 
 // sharesEndpoint reports whether the two tickets advertise overlapping
@@ -431,7 +416,9 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 		if !ticket.waiting(now, h.Config.Timeouts.MatchmakingTicket.Duration()) {
 			h.recordQueueExpirationLocked(ticket, now)
 			h.deleteTicketLocked(ticket.Version, ticket.Queue, ticket.ID, now)
+			continue
 		}
+		ticket.Endpoints = ticket.endpointCheckIns.prune(ticket.Endpoints, now, h.Config.Timeouts.MatchmakingTicket.Duration())
 	}
 
 	h.cleanupMatchmakingTagLeasesLocked(now)
@@ -649,7 +636,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 			return nil, status
 		}
 
-		existing.mergeEndpoint(ip, port)
+		existing.Endpoints = existing.endpointCheckIns.merge(existing.Endpoints, ip, port, now)
 		existing.ClientVersion = clientVersion
 		existing.LocalIPs = localIPs
 		existing.LocalEndpoints = localEndpoints
@@ -715,7 +702,6 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		Version:        version,
 		ClientVersion:  clientVersion,
 		Queue:          queue,
-		Endpoints:      []Endpoint{{IP: ip, Port: port}},
 		Token:          ticketToken,
 		TagToken:       "",
 		SelfTag:        "",
@@ -727,6 +713,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		CheckedIn:      now,
 		stateChanged:   make(chan struct{}),
 	}
+	ticket.Endpoints = ticket.endpointCheckIns.merge(nil, ip, port, now)
 	if tags != nil {
 		ticket.TagToken = tags.SelfToken
 		ticket.SelfTag = tags.Self
@@ -1284,7 +1271,6 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		request.LocalEndpoints = sanitizeLocalEndpoints(request.LocalEndpoints, request.LocalIPs)
 	}
 
-	now := time.Now()
 	token, validAuthorization := bearerToken(r)
 	if !validAuthorization {
 		h.respondError(w, "Invalid authorization", http.StatusBadRequest)
@@ -1293,6 +1279,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	version := request.CompatibilityID
 
 	h.Mu.Lock()
+	now := time.Now()
 	var resp *matchmakingResponse
 	status := http.StatusOK
 

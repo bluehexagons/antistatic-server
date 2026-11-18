@@ -344,6 +344,34 @@ func TestLobbyMergesDualFamilyCheckIns(t *testing.T) {
 	}
 }
 
+func TestLobbyExpiresEndpointFamiliesIndependently(t *testing.T) {
+	lobby := &Lobby{Key: "ABC123"}
+	now := time.Unix(1000, 0)
+	timeout := 30 * time.Second
+	checkIn := func(ip string, port int, token string, at time.Time) string {
+		t.Helper()
+		result, err := lobby.CheckIn(ip, port, token, []string{"192.168.1.10"}, nil, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	token := checkIn("198.51.100.10", 45860, "", now)
+	checkIn("2001:db8::1", 45861, token, now.Add(timeout/2))
+	lobby.Clean(now.Add(timeout+time.Second), timeout)
+	members := lobby.SnapshotFor("198.51.100.10").Members
+	if len(members) != 1 || len(members[0].Endpoints) != 1 || members[0].Endpoints[0].IP != "2001:db8::1" || len(members[0].LocalIPs) != 0 {
+		t.Fatalf("expected only the fresh IPv6 route and no LAN disclosure to the stale address: %#v", members)
+	}
+	if got := checkIn("198.51.100.10", 45862, token, now.Add(timeout+2*time.Second)); got != token {
+		t.Fatal("recovering IPv4 should reuse the membership token")
+	}
+	members = lobby.SnapshotFor("198.51.100.10").Members
+	if len(members) != 1 || len(members[0].Endpoints) != 2 || len(members[0].LocalIPs) != 1 {
+		t.Fatalf("expected recovered IPv4 on the same membership: %#v", members)
+	}
+}
+
 // TestLobbyReplacesEndpointInSameFamilyOnRefresh checks that a port-mapping
 // shift on one family (common with carrier-grade NATs) updates that family's
 // endpoint without disturbing the other family's recorded endpoint.

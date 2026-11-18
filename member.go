@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -22,11 +23,47 @@ type Member struct {
 	// first entry is the original / primary endpoint and remains stable across
 	// refresh cycles. Additional entries are added when the member checks in
 	// over a second address family.
-	Endpoints      []Endpoint
-	LocalIPs       []string
-	LocalEndpoints []Endpoint
-	Token          string
-	CheckedIn      time.Time
+	Endpoints        []Endpoint
+	LocalIPs         []string
+	LocalEndpoints   []Endpoint
+	Token            string
+	CheckedIn        time.Time
+	endpointCheckIns endpointCheckIns
+}
+
+type endpointCheckIns [2]time.Time
+
+func endpointFamilyIndex(ip string) int {
+	if ipFamily(ip) == 6 {
+		return 1
+	}
+	return 0
+}
+
+func (times *endpointCheckIns) merge(endpoints []Endpoint, ip string, port int, now time.Time) []Endpoint {
+	family := endpointFamilyIndex(ip)
+	times[family] = now
+	for i, endpoint := range endpoints {
+		if endpointFamilyIndex(endpoint.IP) == family {
+			endpoints[i] = Endpoint{IP: ip, Port: port}
+			return endpoints
+		}
+	}
+	if len(endpoints) >= maxEndpointsPerMember {
+		return endpoints
+	}
+	return append(endpoints, Endpoint{IP: ip, Port: port})
+}
+
+func (times endpointCheckIns) prune(endpoints []Endpoint, now time.Time, timeout time.Duration) []Endpoint {
+	// The sole endpoint of a live member or waiting ticket is also its most recent check-in.
+	if len(endpoints) < 2 {
+		return endpoints
+	}
+	return slices.DeleteFunc(endpoints, func(endpoint Endpoint) bool {
+		checkedIn := times[endpointFamilyIndex(endpoint.IP)]
+		return !checkedIn.IsZero() && now.After(checkedIn.Add(timeout))
+	})
 }
 
 // MemberView is the per-request projection of a Member. Endpoints lists
@@ -63,24 +100,6 @@ func (m *Member) MatchesEndpoint(ip string, port int) bool {
 		}
 	}
 	return false
-}
-
-// MergeEndpoint records a new (ip, port) for the member. If the member
-// already has an endpoint in the same address family, that entry is
-// replaced (port mapping shifts are common on consumer NATs). Otherwise
-// the endpoint is appended, up to maxEndpointsPerMember.
-func (m *Member) MergeEndpoint(ip string, port int) {
-	family := ipFamily(ip)
-	for i := range m.Endpoints {
-		if ipFamily(m.Endpoints[i].IP) == family {
-			m.Endpoints[i] = Endpoint{IP: ip, Port: port}
-			return
-		}
-	}
-	if len(m.Endpoints) >= maxEndpointsPerMember {
-		return
-	}
-	m.Endpoints = append(m.Endpoints, Endpoint{IP: ip, Port: port})
 }
 
 // View renders this member for a request from `requesterIP`. LAN addresses

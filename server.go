@@ -547,6 +547,7 @@ func (h *lobbyHandler) serveLobby(w http.ResponseWriter, r *http.Request, ip, ke
 	storageKey := lobbyStorageKey(request.CompatibilityID, key)
 
 	h.Mu.Lock()
+	now := time.Now()
 	lobby := h.Lobbies[storageKey]
 	if lobby == nil {
 		if r.Method == http.MethodDelete {
@@ -563,7 +564,7 @@ func (h *lobbyHandler) serveLobby(w http.ResponseWriter, r *http.Request, ip, ke
 		h.Lobbies[storageKey] = lobby
 		h.Metrics.recordLobbyCreated()
 	} else {
-		lobby.Clean(time.Now(), h.Config.Timeouts.LobbyMember.Duration())
+		lobby.Clean(now, h.Config.Timeouts.LobbyMember.Duration())
 	}
 
 	if r.Method == http.MethodDelete {
@@ -580,7 +581,7 @@ func (h *lobbyHandler) serveLobby(w http.ResponseWriter, r *http.Request, ip, ke
 		return
 	}
 
-	memberToken, err := lobby.CheckIn(ip, request.Port, token, request.LocalIPs, request.LocalEndpoints)
+	memberToken, err := lobby.CheckIn(ip, request.Port, token, request.LocalIPs, request.LocalEndpoints, now)
 	if err != nil {
 		h.Mu.Unlock()
 		switch err {
