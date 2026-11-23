@@ -372,10 +372,13 @@ enabled report feature: `crash.jsonl`, `feedback.jsonl`, `gameplay.jsonl`,
 `performance.jsonl`, or `netplay.jsonl`. Disabled collections are not opened,
 created, compacted, or shown in the admin UI. Existing files are left in place
 when a feature is disabled so re-enabling it is reversible.
-The directory is mode 0700 and files are mode 0600. Writes are serialized and
-synced. Startup and daily maintenance compaction safely drop malformed records
-and expired data; readers also tolerate an incomplete final line. Crash and coarse netplay
-reports are retained 90 days, feedback 365 days, and metrics 30 days.
+Use a data directory exclusive to one server process. On Unix, the directory
+is mode 0700 and files are mode 0600. On Windows, set the data directory's ACL
+to restrict access to the service account and authorized operators. Report
+files inherit permissions from the directory when they are created. Writes are
+serialized and synced. Startup and daily maintenance compaction drop malformed
+records and expired data. Readers tolerate an incomplete final line. Crash and
+coarse netplay reports are retained 90 days, feedback 365 days, and metrics 30 days.
 
 Records contain only a random server report ID, a server time rounded to 15
 minutes, app version, and the documented typed fields. The store never adds
@@ -408,7 +411,7 @@ HTTP listener.
 For backups, snapshot or copy the data volume. A copy made during a write may
 end with a partial JSON line, which restore reads safely ignore; a stopped
 server or filesystem/volume snapshot gives a fully consistent set. Preserve
-0700 directory and 0600 file permissions after restore. Backups contain user
+the Unix mode bits or Windows ACLs after restore. Backups contain user
 feedback and should be encrypted and access-controlled.
 
 Lobby and matchmaking ownership uses `Authorization: Bearer <token>`. The
@@ -789,3 +792,17 @@ parallel tests per package, and a two-minute timeout for each package. For
 additional context, add `-count=1 -v -run '^TestName$'` to rerun the failing
 test without the result cache. Use `-json` and redirect to ignored
 `local-artifacts/tests.json` when retaining events and durations for analysis.
+
+On Windows x64, run the same checks from a full checkout in PowerShell. Use a
+shell with Clang and the Windows SDK available for the race tests.
+
+```powershell
+npm.cmd ci
+npm.cmd run check
+$env:CC = 'clang'
+$env:CGO_ENABLED = '1'
+go test -race -p 2 -parallel 2 -timeout 2m ./...
+go vet -p 2 ./...
+$env:CGO_ENABLED = '0'
+go build -p 2 ./...
+```

@@ -170,6 +170,20 @@ type appendFile interface {
 	Close() error
 }
 
+func openReportAppend(path string) (*os.File, error) {
+	// Windows opens O_APPEND handles with append-only access, which prevents
+	// truncating a failed write. The store mutex serializes seeks and writes.
+	file, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := file.Seek(0, io.SeekEnd); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
 type reportStore struct {
 	root           string
 	collections    []storeCollection
@@ -216,7 +230,7 @@ func newReportStoreForFeatures(root string, features FeatureConfig) (*reportStor
 		netplayPending: make(map[string]struct{}),
 		netplayQueue:   make(chan netplayJob, netplayQueueSize),
 		openAppend: func(path string) (appendFile, error) {
-			return os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+			return openReportAppend(path)
 		},
 		eventDigests: make(map[storeCollection]map[string]string),
 		now:          time.Now,

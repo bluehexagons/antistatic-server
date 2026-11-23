@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -77,13 +78,19 @@ func TestReportStorePersistsDeduplicatesAndSecuresFiles(t *testing.T) {
 		t.Fatalf("newReportStore() error = %v", err)
 	}
 	info, err := os.Stat(dir)
-	if err != nil || info.Mode().Perm() != 0o700 {
-		t.Fatalf("store directory mode = %v, err = %v, want 0700", info.Mode().Perm(), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+		t.Fatalf("store directory mode = %v, want 0700", info.Mode().Perm())
 	}
 	for _, collection := range storeCollections {
 		info, err := os.Stat(store.collectionPath(collection))
-		if err != nil || info.Mode().Perm() != 0o600 {
-			t.Fatalf("%s file mode = %v, err = %v, want 0600", collection, info.Mode().Perm(), err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s file mode = %v, want 0600", collection, info.Mode().Perm())
 		}
 	}
 
@@ -388,7 +395,7 @@ func TestReportStoreAppendRollsBackFailures(t *testing.T) {
 			}
 			openNormally := store.openAppend
 			store.openAppend = func(path string) (appendFile, error) {
-				file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+				file, err := openReportAppend(path)
 				if err != nil {
 					return nil, err
 				}
@@ -443,7 +450,7 @@ func TestNetplayPersistenceQueueIsBounded(t *testing.T) {
 		store.Close()
 	}()
 	store.openAppend = func(path string) (appendFile, error) {
-		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		file, err := openReportAppend(path)
 		if err != nil {
 			return nil, err
 		}
@@ -482,7 +489,7 @@ func TestNetplayPendingDuplicateReceivesBoundedRetry(t *testing.T) {
 	firstWriteRelease := make(chan struct{})
 	attempts := 0
 	store.openAppend = func(path string) (appendFile, error) {
-		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		file, err := openReportAppend(path)
 		if err != nil {
 			return nil, err
 		}
@@ -527,7 +534,7 @@ func TestReportStoreCloseDrainsNetplayQueue(t *testing.T) {
 	firstWriteRelease := make(chan struct{})
 	var first sync.Once
 	store.openAppend = func(path string) (appendFile, error) {
-		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		file, err := openReportAppend(path)
 		if err != nil {
 			return nil, err
 		}
