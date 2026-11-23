@@ -8,7 +8,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o antistatic-server .
 
-FROM alpine:3.24.2
+FROM alpine:3.24.4
 
 RUN apk --no-cache add ca-certificates
 RUN addgroup -S antistatic && adduser -S -G antistatic antistatic && mkdir -p /data && chown antistatic:antistatic /data
