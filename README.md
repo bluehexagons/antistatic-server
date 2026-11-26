@@ -607,6 +607,30 @@ are aggregate counters and do not identify other players.
 
 A matchmaking `PUT` may include `?wait=N` to wait up to `N` seconds for a match before returning a waiting response. Values are clamped to 10 seconds, and the request returns early when the ticket is matched or the client disconnects.
 
+### Account-backed quick play
+
+Set `ANTISTATIC_ACCOUNT_API_ORIGIN` to the HTTPS origin of a compatible
+`antistatic-db` instance and `ANTISTATIC_RELAY_TOKEN` to the same server-only
+secret used by that instance. The game uses HTTPS for the account queue.
+Use loopback HTTP for local integration tests. The relay advertises
+`"account_matchmaking_queue":"account-quickplay"`
+in `GET /health` when configured.
+
+Start an `account-quickplay` ticket with a `queue_grant` issued for that queue
+and a fresh 32-byte base64url `registration_token`. Repeat the same ticket ID,
+grant, and proof after a lost first response. Once the relay returns the ticket
+bearer, use it for refreshes and omit the grant. Use a fresh grant and ticket
+for a new search after expiry or cancellation. A `409` on grant redemption
+means the grant is unavailable for that ticket. A `503` means account
+admission is temporarily unavailable or disabled.
+
+The account queue pairs its own tickets. A pairing remains `waiting` until
+the account service accepts the assignment, then both players receive the
+same `match.account_match_id`. Account registration retries reuse the same
+assignment. The account API handles win, loss, and draw reports.
+Guest quick play and Match by Code can operate independently during an
+account API outage.
+
 ### Client game reports
 
 After a matchmaking ticket has been matched, the client may report a game

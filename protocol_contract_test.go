@@ -71,6 +71,9 @@ func validContractMatchmakingResponse(response matchmakingResponse) bool {
 	if response.Match.Role != "host" && response.Match.Role != "client" {
 		return false
 	}
+	if response.Match.AccountMatchID != "" && !accountMatchIDPattern.MatchString(response.Match.AccountMatchID) {
+		return false
+	}
 	for _, peer := range []matchmakingPeer{response.Match.Peer, response.Match.Self} {
 		if !validateMatchmakingCharacter(peer.Metadata.Character) || len(peer.Endpoints) == 0 {
 			return false
@@ -114,6 +117,11 @@ func TestSharedProtocolResponseFixtures(t *testing.T) {
 	if !validContractMatchmakingResponse(matched) {
 		t.Fatalf("valid matchmaking fixture rejected: %#v", matched)
 	}
+	var accountMatch matchmakingResponse
+	readProtocolFixture(t, "valid/account-matchmaking-matched-response.json", &accountMatch)
+	if !validContractMatchmakingResponse(accountMatch) || accountMatch.Match.AccountMatchID == "" {
+		t.Fatal("account matchmaking fixture must carry a valid DB match ID")
+	}
 
 	var invalidMatched matchmakingResponse
 	readProtocolFixture(t, "invalid/matchmaking-matched-response-bad-port.json", &invalidMatched)
@@ -144,6 +152,11 @@ func TestSharedProtocolRequestAndServiceFixtures(t *testing.T) {
 	}
 	if status := decodeProtocolFixtureStrict(t, "invalid/matchmaking-request-extra-metadata.json", &matchmaking); status != http.StatusBadRequest {
 		t.Fatalf("extra metadata status = %d, want %d", status, http.StatusBadRequest)
+	}
+	var accountMatch matchmakingRequest
+	if status := decodeProtocolFixtureStrict(t, "valid/account-matchmaking-request.json", &accountMatch); status != 0 ||
+		accountMatch.Queue != accountMatchmakingQueue || !accountGrantPattern.MatchString(accountMatch.QueueGrant) {
+		t.Fatal("account matchmaking fixture must carry a valid queue grant")
 	}
 	if status := decodeProtocolFixtureStrict(t, "invalid/matchmaking-request-bad-match-code.json", &matchmaking); status != 0 {
 		t.Fatalf("bad match-code fixture decode status = %d", status)

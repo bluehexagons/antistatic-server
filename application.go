@@ -14,6 +14,7 @@ type applicationConfig struct {
 	AdminPassword string
 	Game          Config
 	Security      securityTextConfig
+	Accounts      *accountAPI
 }
 
 type application struct {
@@ -43,6 +44,10 @@ func applicationConfigFromEnv(game Config) (applicationConfig, error) {
 		return applicationConfig{}, err
 	}
 	config.Security = security
+	config.Accounts, err = newAccountAPI(os.Getenv("ANTISTATIC_ACCOUNT_API_ORIGIN"), os.Getenv("ANTISTATIC_RELAY_TOKEN"))
+	if err != nil {
+		return applicationConfig{}, err
+	}
 	if dataDir := strings.TrimSpace(os.Getenv("ANTISTATIC_DATA_DIR")); dataDir != "" {
 		store, err := newReportStoreForFeatures(dataDir, game.Features)
 		if err != nil {
@@ -71,6 +76,7 @@ func newApplicationHandler(config applicationConfig, lobby *lobbyHandler) (*appl
 	}
 	lobby.Config = config.Game
 	lobby.Store = config.Store
+	lobby.Accounts = config.Accounts
 	if config.Store != nil {
 		lobby.LastStoreCompaction = time.Now()
 	}

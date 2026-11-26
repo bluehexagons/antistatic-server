@@ -318,30 +318,32 @@ type lobbyHandler struct {
 	StopOnce            sync.Once
 	MaintainWG          sync.WaitGroup
 	Store               *reportStore
+	Accounts            *accountAPI
 	LastStoreCompaction time.Time
 }
 
 type healthResponse struct {
-	Status            string                `json:"status"`
-	StartTime         time.Time             `json:"start_time"`
-	LobbyCount        int                   `json:"lobby_count"`
-	TicketCount       int                   `json:"ticket_count"`
-	MatchCount        int                   `json:"match_count"`
-	TagLeaseCount     int                   `json:"tag_lease_count"`
-	LobbiesCreated    int64                 `json:"lobbies_created"`
-	SuccessfulMatches int64                 `json:"successful_matches"`
-	QueueAttemptCount int64                 `json:"queue_attempt_count"`
-	MatchSuccessCount int64                 `json:"match_connection_success_count"`
-	MatchFailureCount int64                 `json:"match_connection_failure_count"`
-	QueueCancelCount  int64                 `json:"queue_cancellation_count"`
-	QueueExpireCount  int64                 `json:"queue_expiration_count"`
-	HTTPErrorCount    int64                 `json:"http_error_count"`
-	GameErrorCount    int64                 `json:"game_error_count"`
-	RecentHTTPErrors  []recentError         `json:"http_errors,omitempty"`
-	RecentGameErrors  []recentGameError     `json:"game_errors,omitempty"`
-	Activity          activitySummary       `json:"activity"`
-	Events            []recurringQueueEvent `json:"events"`
-	Version           string                `json:"version"`
+	Status                  string                `json:"status"`
+	StartTime               time.Time             `json:"start_time"`
+	LobbyCount              int                   `json:"lobby_count"`
+	TicketCount             int                   `json:"ticket_count"`
+	MatchCount              int                   `json:"match_count"`
+	TagLeaseCount           int                   `json:"tag_lease_count"`
+	LobbiesCreated          int64                 `json:"lobbies_created"`
+	SuccessfulMatches       int64                 `json:"successful_matches"`
+	QueueAttemptCount       int64                 `json:"queue_attempt_count"`
+	MatchSuccessCount       int64                 `json:"match_connection_success_count"`
+	MatchFailureCount       int64                 `json:"match_connection_failure_count"`
+	QueueCancelCount        int64                 `json:"queue_cancellation_count"`
+	QueueExpireCount        int64                 `json:"queue_expiration_count"`
+	HTTPErrorCount          int64                 `json:"http_error_count"`
+	GameErrorCount          int64                 `json:"game_error_count"`
+	RecentHTTPErrors        []recentError         `json:"http_errors,omitempty"`
+	RecentGameErrors        []recentGameError     `json:"game_errors,omitempty"`
+	Activity                activitySummary       `json:"activity"`
+	Events                  []recurringQueueEvent `json:"events"`
+	Version                 string                `json:"version"`
+	AccountMatchmakingQueue string                `json:"account_matchmaking_queue,omitempty"`
 }
 
 func (h *lobbyHandler) healthResponse() healthResponse {
@@ -370,6 +372,9 @@ func (h *lobbyHandler) healthResponse() healthResponse {
 		Activity:          h.Metrics.snapshotActivity(time.Now()),
 		Events:            h.recurringEvents(time.Now()),
 		Version:           serverVersion,
+	}
+	if h.Accounts != nil {
+		resp.AccountMatchmakingQueue = accountMatchmakingQueue
 	}
 	h.Mu.RUnlock()
 	return resp

@@ -10,7 +10,7 @@ import (
 
 func registerGeneration(h *lobbyHandler, id, queue, bearer, proof string, tags *matchmakingTagPair, now time.Time) (*matchmakingResponse, int) {
 	return h.refreshOrCreateMatchmakingTicketLocked(id, "0.9.5", "0.9.5", queue,
-		"198.51.100.10", 45860, matchmakingMetadata{Character: "Carbon"}, bearer, tags, nil, nil, proof, now)
+		"198.51.100.10", 45860, matchmakingMetadata{Character: "Carbon"}, bearer, tags, nil, nil, proof, accountBinding{}, now)
 }
 
 func TestOrdinaryRegistrationRecoversLostResponse(t *testing.T) {
@@ -25,7 +25,7 @@ func TestOrdinaryRegistrationRecoversLostResponse(t *testing.T) {
 				}
 				if state != "waiting" {
 					peer, status := h.refreshOrCreateMatchmakingTicketLocked("Peer", "0.9.5", "0.9.5", "default",
-						"198.51.100.20", 45861, matchmakingMetadata{Character: "Silicon"}, "", nil, nil, nil, "peer-proof", now)
+						"198.51.100.20", 45861, matchmakingMetadata{Character: "Silicon"}, "", nil, nil, nil, "peer-proof", accountBinding{}, now)
 					if status != http.StatusOK || peer.Status != "matched" {
 						t.Fatalf("peer: %d %#v", status, peer)
 					}
@@ -212,7 +212,7 @@ func TestActiveCodeGenerationSurvivesLeaseRenewal(t *testing.T) {
 		t.Fatal(status)
 	}
 	peerTags := &matchmakingTagPair{Self: "BRAVO2", Peer: "ALPHA1", SelfToken: "peer-proof"}
-	if _, status := h.refreshOrCreateMatchmakingTicketLocked("Peer", "0.9.5", "0.9.5", "code.alpha1-bravo2", "198.51.100.20", 45861, matchmakingMetadata{Character: "Silicon"}, "", peerTags, nil, nil, "", now); status != http.StatusOK {
+	if _, status := h.refreshOrCreateMatchmakingTicketLocked("Peer", "0.9.5", "0.9.5", "code.alpha1-bravo2", "198.51.100.20", 45861, matchmakingMetadata{Character: "Silicon"}, "", peerTags, nil, nil, "", accountBinding{}, now); status != http.StatusOK {
 		t.Fatal(status)
 	}
 	later := now.Add(2 * time.Second)

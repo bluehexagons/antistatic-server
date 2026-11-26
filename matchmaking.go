@@ -53,6 +53,8 @@ type MatchmakingTicket struct {
 	registrationOwnership [sha256.Size]byte
 	generationKey         [sha256.Size]byte
 	endpointCheckIns      endpointCheckIns
+	account               accountBinding
+	accountMatchPublished bool
 }
 
 // Admission reserves a slot so cancellation never needs to evict another
@@ -133,6 +135,7 @@ func (t *MatchmakingTicket) scrubForReportRetention() {
 	t.SelfTag = ""
 	t.PeerTag = ""
 	t.stateChanged = nil
+	t.account = accountBinding{}
 }
 
 type MatchParticipant struct {
@@ -150,6 +153,7 @@ type Match struct {
 	Queue     string
 	CreatedAt time.Time
 	Players   [2]MatchParticipant
+	account   *accountPairing
 }
 
 type MatchmakingQueue struct {
@@ -178,7 +182,8 @@ type matchmakingMatchResponse struct {
 	// the match was registered. Both peers receive the same value so they
 	// can anchor their first hole-punch probe to a shared instant rather
 	// than to whenever their own poll happened to learn of the match.
-	MatchedAtMs int64 `json:"matched_at_ms,omitempty"`
+	MatchedAtMs    int64  `json:"matched_at_ms,omitempty"`
+	AccountMatchID string `json:"account_match_id,omitempty"`
 }
 
 type matchmakingQueueResponse struct {
@@ -214,6 +219,7 @@ type matchmakingRequest struct {
 	LocalEndpoints    []Endpoint          `json:"local_endpoints,omitempty"`
 	MatchCode         *matchmakingTagPair `json:"match_code,omitempty"`
 	RegistrationToken string              `json:"registration_token,omitempty"`
+	QueueGrant        string              `json:"queue_grant,omitempty"`
 }
 
 type matchmakingCancelRequest struct {
@@ -330,7 +336,8 @@ func matchmakingMatchID(version, queue string, first, second MatchParticipant) s
 }
 
 func (t *MatchmakingTicket) waiting(now time.Time, timeout time.Duration) bool {
-	return t.MatchedID == "" && now.Before(t.CheckedIn.Add(timeout))
+	return t.MatchedID == "" && now.Before(t.CheckedIn.Add(timeout)) &&
+		(t.account.ID == "" || now.Before(t.account.ExpiresAt))
 }
 
 func (m *Match) expired(now time.Time, timeout time.Duration) bool {
@@ -366,6 +373,9 @@ func (m *Match) responseFor(ticketID string) *matchmakingMatchResponse {
 			Metadata:  peer.Metadata,
 		},
 		MatchedAtMs: m.CreatedAt.UnixMilli(),
+	}
+	if m.account != nil {
+		response.AccountMatchID = m.account.matchID
 	}
 	// LAN candidates are only safe to reveal to a peer that shares one of
 	// our public IPs (i.e. is plausibly behind the same NAT). With two
@@ -426,16 +436,26 @@ func (h *lobbyHandler) cleanupMatchmakingLocked(now time.Time) {
 }
 
 func (h *lobbyHandler) expireMatchLocked(matchID string, match *Match, now time.Time) bool {
-	if match == nil || !match.expired(now, h.Config.Timeouts.MatchmakingMatch.Duration()) {
+	if match == nil {
 		return false
 	}
+	bindingExpired := match.account != nil && match.account.matchID == "" &&
+		!match.account.registering && !now.Before(match.account.bindingDeadline)
+	if !bindingExpired && !match.expired(now, h.Config.Timeouts.MatchmakingMatch.Duration()) {
+		return false
+	}
+	h.retireMatchLocked(matchID, match)
+	return true
+}
+
+func (h *lobbyHandler) retireMatchLocked(matchID string, match *Match) {
 	for _, player := range match.Players {
 		if ticket := h.Tickets[matchmakingTicketKey(match.Version, match.Queue, player.TicketID)]; ticket != nil {
+			ticket.notifyStateChangedLocked()
 			ticket.scrubForReportRetention()
 		}
 	}
 	delete(h.Matches, matchID)
-	return true
 }
 
 func (h *lobbyHandler) cleanupMatchmakingTagLeasesLocked(now time.Time) {
@@ -608,7 +628,7 @@ func (h *lobbyHandler) refreshMatchmakingTagLeaseLocked(ticket *MatchmakingTicke
 	return status
 }
 
-func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, clientVersion, queue, ip string, port int, metadata matchmakingMetadata, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, registrationToken string, now time.Time) (*matchmakingResponse, int) {
+func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version, clientVersion, queue, ip string, port int, metadata matchmakingMetadata, token string, tags *matchmakingTagPair, localIPs []string, localEndpoints []Endpoint, registrationToken string, binding accountBinding, now time.Time) (*matchmakingResponse, int) {
 	h.ensureMatchmakingIndexesLocked()
 	h.cleanupMatchmakingLocked(now)
 	key := matchmakingTicketKey(version, queue, ticketID)
@@ -618,6 +638,9 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 			return nil, http.StatusForbidden
 		}
 		if existing.MatchedID == "" && existing.Metadata != metadata {
+			return nil, http.StatusConflict
+		}
+		if existing.account.ID != "" && existing.ClientVersion != clientVersion {
 			return nil, http.StatusConflict
 		}
 		if existing.MatchedID != "" {
@@ -652,23 +675,22 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 						match.Players[i].LocalEndpoints = append([]Endpoint(nil), existing.LocalEndpoints...)
 					}
 				}
-				resp := h.matchmakingTicketResponseLocked("matched", existing, now)
-				resp.Match = match.responseFor(existing.ID)
-				return resp, http.StatusOK
+				return h.matchmakingPairResponseLocked(existing, match, now), http.StatusOK
 			}
 		}
 
 		match, other := h.findCompatibleMatchLocked(existing, now)
 		if match != nil {
 			h.registerMatchLocked(match, existing, other)
-			resp := h.matchmakingTicketResponseLocked("matched", existing, now)
-			resp.Match = match.responseFor(existing.ID)
-			return resp, http.StatusOK
+			return h.matchmakingPairResponseLocked(existing, match, now), http.StatusOK
 		}
 
 		return h.matchmakingTicketResponseLocked("waiting", existing, now), http.StatusOK
 	}
 	if token != "" {
+		return nil, http.StatusNotFound
+	}
+	if queue == accountMatchmakingQueue && (binding.ID == "" || !now.Before(binding.ExpiresAt)) {
 		return nil, http.StatusNotFound
 	}
 	if generation := h.Generations[generationKey]; generation != nil && generation.Canceled {
@@ -712,6 +734,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		CreatedAt:      now,
 		CheckedIn:      now,
 		stateChanged:   make(chan struct{}),
+		account:        binding,
 	}
 	ticket.Endpoints = ticket.endpointCheckIns.merge(nil, ip, port, now)
 	if tags != nil {
@@ -734,9 +757,7 @@ func (h *lobbyHandler) refreshOrCreateMatchmakingTicketLocked(ticketID, version,
 		h.addWaitingTicketLocked(ticket)
 		h.recordMatchmakingAttemptLocked(version, queue, now)
 		h.registerMatchLocked(match, ticket, other)
-		resp := h.matchmakingTicketResponseLocked("matched", ticket, now)
-		resp.Match = match.responseFor(ticket.ID)
-		return resp, http.StatusOK
+		return h.matchmakingPairResponseLocked(ticket, match, now), http.StatusOK
 	}
 
 	h.Tickets[key] = ticket
@@ -764,6 +785,11 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 	if candidate.CreatedAt.Before(ticket.CreatedAt) || (candidate.CreatedAt.Equal(ticket.CreatedAt) && candidate.ID < ticket.ID) {
 		first, second = candidate, ticket
 	}
+	// Stable host selection allows the same account pairing to be recovered
+	// even if the relay restarted and the tickets were recreated out of order.
+	if ticket.account.ID != "" && first.account.ID > second.account.ID {
+		first, second = second, first
+	}
 
 	firstParticipant, secondParticipant := assignMatchParticipants(first, second)
 
@@ -773,6 +799,9 @@ func (h *lobbyHandler) findCompatibleMatchLocked(ticket *MatchmakingTicket, now 
 		Queue:     ticket.Queue,
 		CreatedAt: now,
 		Players:   [2]MatchParticipant{firstParticipant, secondParticipant},
+	}
+	if ticket.account.ID != "" {
+		match.account = newAccountPairing(first, second)
 	}
 
 	return match, candidate
@@ -795,13 +824,35 @@ func (h *lobbyHandler) registerMatchLocked(match *Match, first, second *Matchmak
 	second.CheckedIn = match.CreatedAt
 	h.removeWaitingTicketLocked(first)
 	h.removeWaitingTicketLocked(second)
+	h.Matches[match.ID] = match
+	if match.account == nil {
+		h.publishMatchLocked(match, match.CreatedAt)
+	}
+}
+
+func (h *lobbyHandler) publishMatchLocked(match *Match, now time.Time) {
+	first := h.Tickets[matchmakingTicketKey(match.Version, match.Queue, match.Players[0].TicketID)]
+	second := h.Tickets[matchmakingTicketKey(match.Version, match.Queue, match.Players[1].TicketID)]
+	match.CreatedAt = now
+	first.CheckedIn, second.CheckedIn = now, now
+	if match.account != nil {
+		first.accountMatchPublished, second.accountMatchPublished = true, true
+	}
 	h.recordMatchmakingQueueWaitLocked(match, first, second)
 	waitMs := max(0, (match.CreatedAt.Sub(first.CreatedAt).Milliseconds()+match.CreatedAt.Sub(second.CreatedAt).Milliseconds())/2)
 	h.Metrics.recordMatchmakingMatch(match.CreatedAt, time.Duration(waitMs)*time.Millisecond)
-	h.Matches[match.ID] = match
 	first.notifyStateChangedLocked()
 	second.notifyStateChangedLocked()
 	h.Metrics.recordSuccessfulMatch()
+}
+
+func (h *lobbyHandler) matchmakingPairResponseLocked(ticket *MatchmakingTicket, match *Match, now time.Time) *matchmakingResponse {
+	if match.account != nil && match.account.matchID == "" {
+		return h.matchmakingTicketResponseLocked("waiting", ticket, now)
+	}
+	resp := h.matchmakingTicketResponseLocked("matched", ticket, now)
+	resp.Match = match.responseFor(ticket.ID)
+	return resp
 }
 
 func (h *lobbyHandler) recordMatchmakingQueueWaitLocked(match *Match, first, second *MatchmakingTicket) {
@@ -879,9 +930,7 @@ func (h *lobbyHandler) matchmakingStateLocked(version, queue, ticketID string, t
 				}
 				return h.matchmakingTicketResponseLocked("canceled", ticket, now), http.StatusOK
 			}
-			resp := h.matchmakingTicketResponseLocked("matched", ticket, now)
-			resp.Match = match.responseFor(ticket.ID)
-			return resp, http.StatusOK
+			return h.matchmakingPairResponseLocked(ticket, match, now), http.StatusOK
 		}
 		if now.After(ticket.CheckedIn.Add(h.Config.Timeouts.MatchmakingReportRetention.Duration())) {
 			h.deleteTicketLocked(version, queue, ticketID, now)
@@ -1016,16 +1065,7 @@ func (h *lobbyHandler) cancelMatchmakingLocked(version, queue, ticketID string, 
 
 	if ticket.MatchedID != "" {
 		if match, ok := h.Matches[ticket.MatchedID]; ok {
-			for _, player := range match.Players {
-				if player.TicketID == ticket.ID {
-					continue
-				}
-				if peer := h.Tickets[matchmakingTicketKey(match.Version, match.Queue, player.TicketID)]; peer != nil {
-					peer.notifyStateChangedLocked()
-					peer.scrubForReportRetention()
-				}
-			}
-			delete(h.Matches, ticket.MatchedID)
+			h.retireMatchLocked(ticket.MatchedID, match)
 			h.deleteTicketLocked(version, queue, ticketID, now)
 			return resp, http.StatusOK
 		}
@@ -1175,6 +1215,10 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, t
 		h.respondError(w, "Invalid game report", http.StatusBadRequest)
 		return
 	}
+	if queue == accountMatchmakingQueue && !secureAccountRequest(r, getClientIP(r)) {
+		h.respondError(w, "Account queue requires HTTPS", http.StatusForbidden)
+		return
+	}
 
 	token, validAuthorization := bearerToken(r)
 	if !validAuthorization {
@@ -1195,7 +1239,7 @@ func (h *lobbyHandler) serveGameReport(w http.ResponseWriter, r *http.Request, t
 		h.respondError(w, "Invalid matchmaking ticket token", http.StatusForbidden)
 		return
 	}
-	if t.MatchedID == "" {
+	if t.MatchedID == "" || (t.Queue == accountMatchmakingQueue && !t.accountMatchPublished) {
 		h.Mu.Unlock()
 		h.respondError(w, "Matchmaking ticket is not matched", http.StatusConflict)
 		return
@@ -1262,6 +1306,10 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 		h.respondError(w, "Invalid matchmaking queue", http.StatusBadRequest)
 		return
 	}
+	if queue == accountMatchmakingQueue && !secureAccountRequest(r, ip) {
+		h.respondError(w, "Account queue requires HTTPS", http.StatusForbidden)
+		return
+	}
 	if r.Method == http.MethodPut {
 		if !validatePeerPort(request.Port) || !validateMatchmakingCharacter(request.Metadata.Character) {
 			h.respondError(w, "Invalid matchmaking request", http.StatusBadRequest)
@@ -1278,6 +1326,21 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 	version := request.CompatibilityID
 
+	var binding accountBinding
+	if r.Method == http.MethodPut {
+		if queue == accountMatchmakingQueue {
+			var status int
+			binding, status = h.prepareAccountTicket(r.Context(), ticket, token, request)
+			if status != http.StatusOK {
+				h.respondError(w, "Account queue admission failed", status)
+				return
+			}
+		} else if request.QueueGrant != "" {
+			h.respondError(w, "Queue grant requires the account queue", http.StatusBadRequest)
+			return
+		}
+	}
+
 	h.Mu.Lock()
 	now := time.Now()
 	var resp *matchmakingResponse
@@ -1285,7 +1348,7 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 
 	switch r.Method {
 	case http.MethodPut:
-		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, request.ClientVersion, queue, ip, request.Port, request.Metadata, token, tags, request.LocalIPs, request.LocalEndpoints, request.RegistrationToken, now)
+		resp, status = h.refreshOrCreateMatchmakingTicketLocked(ticket, version, request.ClientVersion, queue, ip, request.Port, request.Metadata, token, tags, request.LocalIPs, request.LocalEndpoints, request.RegistrationToken, binding, now)
 	case http.MethodDelete:
 		resp, status = h.cancelMatchmakingLocked(version, queue, ticket, token, tags, request.RegistrationToken, now)
 	default:
@@ -1293,6 +1356,13 @@ func (h *lobbyHandler) serveMatchmaking(w http.ResponseWriter, r *http.Request, 
 	}
 
 	h.Mu.Unlock()
+
+	if r.Method == http.MethodPut && queue == accountMatchmakingQueue && status == http.StatusOK && resp != nil && resp.Status == "waiting" {
+		h.confirmAccountMatch(r.Context(), version, ticket, resp.Token)
+		h.Mu.Lock()
+		resp, status = h.matchmakingStateLocked(version, queue, ticket, resp.Token, time.Now())
+		h.Mu.Unlock()
+	}
 
 	// Long-poll on PUT: if the ticket is still waiting and the client asked
 	// us to wait, block until a match appears, the deadline elapses, or the

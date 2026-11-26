@@ -1096,7 +1096,7 @@ func TestMatchmakingExpiresEndpointFamiliesIndependently(t *testing.T) {
 	checkIn := func(ip string, port int, token string, at time.Time) *matchmakingResponse {
 		t.Helper()
 		response, status := h.refreshOrCreateMatchmakingTicketLocked("TicketA", version, "0.9.5", "default", ip, port,
-			matchmakingMetadata{Character: "Silicon"}, token, nil, nil, nil, "", at)
+			matchmakingMetadata{Character: "Silicon"}, token, nil, nil, nil, "", accountBinding{}, at)
 		if status != http.StatusOK || response == nil || response.Status != "waiting" {
 			t.Fatalf("check-in returned %d, %#v", status, response)
 		}

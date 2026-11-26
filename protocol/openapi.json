@@ -43,6 +43,7 @@
       "parameters": [{ "$ref": "#/components/parameters/MatchmakingTicket" }],
       "put": {
         "operationId": "putMatchmakingTicket",
+        "description": "Register or refresh a guest, private, or account-backed ticket. Account-backed tickets use the queue advertised in health and require a valid queue_grant and a 43-character base64url registration_token when created. A matching ticket stays waiting until the account service confirms its assignment.",
         "security": [{}, { "bearerAuth": [] }],
         "parameters": [{ "$ref": "#/components/parameters/LongPollWait" }],
         "requestBody": { "$ref": "#/components/requestBodies/Matchmaking" },
@@ -50,6 +51,7 @@
           "200": { "$ref": "#/components/responses/Matchmaking" },
           "400": { "$ref": "#/components/responses/PlainError" },
           "403": { "$ref": "#/components/responses/PlainError" },
+          "404": { "$ref": "#/components/responses/PlainError" },
           "409": { "$ref": "#/components/responses/PlainError" },
           "413": { "$ref": "#/components/responses/PlainError" },
           "415": { "$ref": "#/components/responses/PlainError" },
@@ -343,7 +345,8 @@
               "local_ips": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 64 } },
               "local_endpoints": { "type": "array", "maxItems": 8, "items": { "$ref": "#/components/schemas/Endpoint" } },
               "match_code": { "$ref": "#/components/schemas/MatchCodeClaim" },
-              "registration_token": { "$ref": "#/components/schemas/MatchmakingRegistrationToken" }
+              "registration_token": { "$ref": "#/components/schemas/MatchmakingRegistrationToken" },
+              "queue_grant": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$", "description": "Opaque account API grant for admission to account-quickplay. Send with the registration proof on the first PUT and on proof-only retries after a lost response. Omit on ordinary guest and private tickets." }
             }
           }
         ]
@@ -372,7 +375,8 @@
           "role": { "$ref": "#/components/schemas/MatchmakingRole" },
           "peer": { "$ref": "#/components/schemas/MatchmakingPeer" },
           "self": { "$ref": "#/components/schemas/MatchmakingPeer" },
-          "matched_at_ms": { "type": "integer", "minimum": 0 }
+          "matched_at_ms": { "type": "integer", "minimum": 0 },
+          "account_match_id": { "type": "string", "pattern": "^rm_[a-f0-9]{32}$", "description": "Durable DB assignment ID for account-backed matches, identical for both players. Use for account API result reports." }
         }
       },
       "MatchmakingQueue": {
@@ -523,7 +527,8 @@
           "game_errors": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/RecentGameError" } },
           "activity": { "$ref": "#/components/schemas/ActivitySummary" },
           "events": { "type": "array", "maxItems": 32, "items": { "$ref": "#/components/schemas/CommunityQueueEvent" } },
-          "version": { "type": "string" }
+          "version": { "type": "string" },
+          "account_matchmaking_queue": { "type": "string", "const": "account-quickplay", "description": "Present when the relay is configured to use an account API." }
         }
       }
     }

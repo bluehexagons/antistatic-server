@@ -85,6 +85,7 @@ export type MatchmakingRequest = ClientIdentity & {
   local_endpoints?: Endpoint[];
   match_code?: MatchCodeClaim;
   registration_token?: MatchmakingRegistrationToken;
+  queue_grant?: string;
 };
 
 export type MatchmakingCancelRequest = ClientIdentity & {
@@ -105,6 +106,7 @@ export type MatchmakingMatch = {
   peer: MatchmakingPeer;
   self: MatchmakingPeer;
   matched_at_ms?: number;
+  account_match_id?: string;
 };
 
 export type MatchmakingQueue = {
@@ -272,4 +274,5 @@ export type HealthResponse = {
   activity: ActivitySummary;
   events: CommunityQueueEvent[];
   version: string;
+  account_matchmaking_queue?: "account-quickplay";
 };
