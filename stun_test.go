@@ -21,11 +21,14 @@ func sendStunBindingRequest(t *testing.T, target *net.UDPAddr) (txn []byte, resp
 	for i := range txn {
 		txn[i] = byte(i*7 + 13)
 	}
-	req := make([]byte, stunHeaderLength)
+	// A SOFTWARE attribute with three bytes requires one padding byte.
+	software := []byte{0x80, 0x22, 0, 3, 't', 's', 't', 0}
+	req := make([]byte, stunHeaderLength+len(software))
 	binary.BigEndian.PutUint16(req[0:2], stunBindingRequestType)
-	binary.BigEndian.PutUint16(req[2:4], 0)
+	binary.BigEndian.PutUint16(req[2:4], uint16(len(software)))
 	binary.BigEndian.PutUint32(req[4:8], stunMagicCookie)
 	copy(req[8:], txn)
+	copy(req[stunHeaderLength:], software)
 
 	if _, err := conn.WriteToUDP(req, target); err != nil {
 		t.Fatalf("client write: %v", err)
@@ -62,7 +65,7 @@ func TestStunBindingResponse(t *testing.T) {
 	if !bytes.Equal(resp[8:stunHeaderLength], txn) {
 		t.Fatalf("transaction id mismatch: got %x want %x", resp[8:stunHeaderLength], txn)
 	}
-	if got := binary.BigEndian.Uint16(resp[stunHeaderLength:stunHeaderLength+2]); got != stunXorMappedAddrType {
+	if got := binary.BigEndian.Uint16(resp[stunHeaderLength : stunHeaderLength+2]); got != stunXorMappedAddrType {
 		t.Fatalf("attr type = %#x, want XOR-MAPPED-ADDRESS", got)
 	}
 	body := resp[stunHeaderLength+4:]

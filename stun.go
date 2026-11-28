@@ -28,8 +28,8 @@ const (
 )
 
 type stunServer struct {
-	conn     *net.UDPConn
-	wg       sync.WaitGroup
+	conn      *net.UDPConn
+	wg        sync.WaitGroup
 	closeOnce sync.Once
 }
 
@@ -64,7 +64,8 @@ func (s *stunServer) localAddr() net.Addr {
 
 func (s *stunServer) serve() {
 	defer s.wg.Done()
-	buf := make([]byte, stunMaxPacketLength)
+	// Leave room to detect a datagram that exceeds the supported maximum.
+	buf := make([]byte, stunMaxPacketLength+1)
 	for {
 		n, raddr, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
@@ -76,12 +77,14 @@ func (s *stunServer) serve() {
 			slog.Debug("STUN read error", "error", err)
 			continue
 		}
-		s.handlePacket(buf[:n], raddr)
+		if n <= stunMaxPacketLength {
+			s.handlePacket(buf[:n], raddr)
+		}
 	}
 }
 
 func (s *stunServer) handlePacket(b []byte, raddr *net.UDPAddr) {
-	if len(b) < stunHeaderLength {
+	if len(b) < stunHeaderLength || len(b) > stunMaxPacketLength {
 		return
 	}
 	if binary.BigEndian.Uint16(b[0:2]) != stunBindingRequestType {
@@ -89,6 +92,20 @@ func (s *stunServer) handlePacket(b []byte, raddr *net.UDPAddr) {
 	}
 	if binary.BigEndian.Uint32(b[4:8]) != stunMagicCookie {
 		return
+	}
+	bodyLength := int(binary.BigEndian.Uint16(b[2:4]))
+	if bodyLength%4 != 0 || bodyLength != len(b)-stunHeaderLength {
+		return
+	}
+	for offset := stunHeaderLength; offset < len(b); {
+		if len(b)-offset < 4 {
+			return
+		}
+		length := int(binary.BigEndian.Uint16(b[offset+2 : offset+4]))
+		offset += 4 + (length+3)&^3
+		if offset > len(b) {
+			return
+		}
 	}
 	txn := b[8:stunHeaderLength]
 	resp, ok := buildBindingSuccess(txn, raddr)
