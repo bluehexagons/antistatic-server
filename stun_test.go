@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func sendStunBindingRequest(t *testing.T, target *net.UDPAddr) (txn []byte, response []byte, srcPort int) {
+func sendStunBindingRequest(t *testing.T, target *net.UDPAddr, attributes []byte) (txn []byte, response []byte, srcPort int) {
 	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
@@ -21,14 +21,12 @@ func sendStunBindingRequest(t *testing.T, target *net.UDPAddr) (txn []byte, resp
 	for i := range txn {
 		txn[i] = byte(i*7 + 13)
 	}
-	// A SOFTWARE attribute with three bytes requires one padding byte.
-	software := []byte{0x80, 0x22, 0, 3, 't', 's', 't', 0}
-	req := make([]byte, stunHeaderLength+len(software))
+	req := make([]byte, stunHeaderLength+len(attributes))
 	binary.BigEndian.PutUint16(req[0:2], stunBindingRequestType)
-	binary.BigEndian.PutUint16(req[2:4], uint16(len(software)))
+	binary.BigEndian.PutUint16(req[2:4], uint16(len(attributes)))
 	binary.BigEndian.PutUint32(req[4:8], stunMagicCookie)
 	copy(req[8:], txn)
-	copy(req[stunHeaderLength:], software)
+	copy(req[stunHeaderLength:], attributes)
 
 	if _, err := conn.WriteToUDP(req, target); err != nil {
 		t.Fatalf("client write: %v", err)
@@ -50,9 +48,23 @@ func TestStunBindingResponse(t *testing.T) {
 	defer srv.Close(context.Background())
 
 	target := srv.localAddr().(*net.UDPAddr)
+	for _, test := range []struct {
+		name       string
+		attributes []byte
+	}{
+		// The Antistatic 0.9.125 client sends only the binding header.
+		{name: "header only"},
+		{name: "padded SOFTWARE attribute", attributes: []byte{0x80, 0x22, 0, 3, 't', 's', 't', 0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			txn, resp, srcPort := sendStunBindingRequest(t, target, test.attributes)
+			checkIPv4StunBindingResponse(t, txn, resp, srcPort)
+		})
+	}
+}
 
-	txn, resp, srcPort := sendStunBindingRequest(t, target)
-
+func checkIPv4StunBindingResponse(t *testing.T, txn, resp []byte, srcPort int) {
+	t.Helper()
 	if len(resp) < stunHeaderLength+12 {
 		t.Fatalf("response too short: %d", len(resp))
 	}
